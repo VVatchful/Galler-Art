@@ -13,6 +13,8 @@ public class AsciiDashboard extends JFrame {
     private final JButton choose = new JButton("Choose image...");
     private final JButton convert = new JButton("Generate preview");
     private final JButton export = new JButton("Export TXT");
+    private final JButton exportHtml = new JButton("Export HTML");
+    private final JCheckBox color = new JCheckBox("Use original RGB colors", false);
     private final JSpinner columns = new JSpinner(new SpinnerNumberModel(160, 10, 1000, 10));
     private final JComboBox<ImageInspect.OutputFormat> format =
             new JComboBox<>(ImageInspect.OutputFormat.values());
@@ -24,6 +26,7 @@ public class AsciiDashboard extends JFrame {
     private final JTextArea preview = new JTextArea();
     private final JCheckBox fitPreview = new JCheckBox("Fit preview to window", true);
     private final FittedPreview fittedPreview = new FittedPreview();
+    private final FittedPreview zoomPreview = new FittedPreview();
     private final CardLayout previewLayout = new CardLayout();
     private final JPanel previewViews = new JPanel(previewLayout);
     private final JLabel status = new JLabel("Choose an image to get started.");
@@ -32,6 +35,7 @@ public class AsciiDashboard extends JFrame {
     private BufferedImage source;
     private File sourceFile;
     private String generated;
+    private ImageInspect.AsciiResult generatedResult;
     private boolean busy;
 
     public AsciiDashboard() {
@@ -50,7 +54,6 @@ public class AsciiDashboard extends JFrame {
 
         JPanel settings = new JPanel();
         settings.setLayout(new BoxLayout(settings, BoxLayout.Y_AXIS));
-        settings.setPreferredSize(new Dimension(290, 640));
         addControl(settings, new JLabel("SOURCE IMAGE"));
         addControl(settings, choose);
         addControl(settings, filename);
@@ -67,10 +70,12 @@ public class AsciiDashboard extends JFrame {
         addControl(settings, row("Clip each end (%)", clipping));
         clipping.setToolTipText("Trim extreme shadows and highlights before stretching grayscale.");
         addControl(settings, invert);
+        addControl(settings, color);
         addControl(settings, fitPreview);
         addControl(settings, row("Preview font size", fontSize));
         addControl(settings, convert);
         addControl(settings, export);
+        addControl(settings, exportHtml);
         settings.add(Box.createVerticalGlue());
         JScrollPane settingsScroll = new JScrollPane(settings);
         settingsScroll.setPreferredSize(new Dimension(315, 640));
@@ -83,7 +88,8 @@ public class AsciiDashboard extends JFrame {
         preview.setForeground(new Color(232, 237, 244));
         preview.setMargin(new Insets(12, 12, 12, 12));
         updateFont();
-        JScrollPane scroll = new JScrollPane(preview);
+        zoomPreview.fit = false;
+        JScrollPane scroll = new JScrollPane(zoomPreview);
         previewViews.add(fittedPreview, "fit");
         previewViews.add(scroll, "text");
         previewViews.setBorder(BorderFactory.createTitledBorder("ASCII preview"));
@@ -93,6 +99,8 @@ public class AsciiDashboard extends JFrame {
         choose.addActionListener(event -> chooseImage());
         convert.addActionListener(event -> generate());
         export.addActionListener(event -> exportText());
+        exportHtml.addActionListener(event -> exportHtml());
+        color.addActionListener(event -> refreshColor());
         columns.addChangeListener(event -> invalidatePreview());
         format.addActionListener(event -> {
             ImageInspect.OutputFormat selected = (ImageInspect.OutputFormat) format.getSelectedItem();
@@ -130,6 +138,14 @@ public class AsciiDashboard extends JFrame {
 
     private void updateFont() {
         preview.setFont(new Font(Font.MONOSPACED, Font.PLAIN, (Integer) fontSize.getValue()));
+        zoomPreview.setFont(preview.getFont());
+        zoomPreview.revalidate();
+        zoomPreview.repaint();
+    }
+
+    private void refreshColor() {
+        fittedPreview.setColors(color.isSelected() ? generatedResult : null);
+        zoomPreview.setColors(color.isSelected() ? generatedResult : null);
     }
 
     private void updatePreviewMode() {
@@ -141,6 +157,7 @@ public class AsciiDashboard extends JFrame {
         updateOutputDimensions();
         generated = null;
         export.setEnabled(false);
+        exportHtml.setEnabled(false);
         if (source != null) {
             status.setText("Options changed. Generate a new preview to export these settings.");
         }
@@ -158,6 +175,7 @@ public class AsciiDashboard extends JFrame {
         choose.setEnabled(!busy);
         convert.setEnabled(!busy && source != null);
         export.setEnabled(!busy && generated != null);
+        exportHtml.setEnabled(!busy && generated != null);
         columns.setEnabled(!busy);
         format.setEnabled(!busy && source != null);
         contrast.setEnabled(!busy);
@@ -191,8 +209,11 @@ public class AsciiDashboard extends JFrame {
                     original.repaint();
                     updateOutputDimensions();
                     generated = null;
+                    generatedResult = null;
                     preview.setText("");
                     fittedPreview.setAscii("");
+                    zoomPreview.setAscii("");
+                    refreshColor();
                     loaded = true;
                 } catch (Exception exception) {
                     showError(exception);
@@ -220,16 +241,19 @@ public class AsciiDashboard extends JFrame {
         ImageInspect.OutputFormat selectedFormat = (ImageInspect.OutputFormat) format.getSelectedItem();
         setBusy(true);
         status.setText("Generating ASCII...");
-        new SwingWorker<String, Void>() {
-            protected String doInBackground() {
-                return ImageInspect.toAscii(source, width, enhance, clip, reverse, selectedFormat);
+        new SwingWorker<ImageInspect.AsciiResult, Void>() {
+            protected ImageInspect.AsciiResult doInBackground() {
+                return ImageInspect.convert(source, width, enhance, clip, reverse, selectedFormat);
             }
 
             protected void done() {
                 try {
-                    generated = get();
+                    generatedResult = get();
+                    generated = generatedResult.text;
                     preview.setText(generated);
                     fittedPreview.setAscii(generated);
+                    zoomPreview.setAscii(generated);
+                    refreshColor();
                     preview.setCaretPosition(0);
                     status.setText(source.getWidth() + " x " + source.getHeight() + " pixels  |  "
                             + generated.indexOf('\n') + " columns x " + generated.lines().count()
@@ -245,14 +269,22 @@ public class AsciiDashboard extends JFrame {
     }
 
     private void exportText() {
+        exportFile(false);
+    }
+
+    private void exportHtml() {
+        exportFile(true);
+    }
+
+    private void exportFile(boolean html) {
         if (generated == null || busy) return;
         try {
             Path folder = Path.of("ascii");
             Files.createDirectories(folder);
             String name = sourceFile.getName();
             int dot = name.lastIndexOf('.');
-            Path output = folder.resolve((dot > 0 ? name.substring(0, dot) : name) + ".txt");
-            Files.writeString(output, generated, StandardCharsets.UTF_8);
+            Path output = folder.resolve((dot > 0 ? name.substring(0, dot) : name) + (html ? ".html" : ".txt"));
+            Files.writeString(output, html ? generatedResult.toHtml(color.isSelected()) : generated, StandardCharsets.UTF_8);
             status.setText("Saved " + output.toAbsolutePath());
         } catch (Exception exception) {
             showError(exception);
@@ -268,9 +300,11 @@ public class AsciiDashboard extends JFrame {
     static class FittedPreview extends JPanel {
         private String[] rows = new String[0];
         private int columns;
+        private ImageInspect.AsciiResult colors;
+        boolean fit = true;
 
         FittedPreview() {
-            setBackground(new Color(18, 22, 29));
+            setBackground(Color.BLACK);
             setForeground(new Color(232, 237, 244));
             setFont(new Font(Font.MONOSPACED, Font.PLAIN, 16));
         }
@@ -279,12 +313,29 @@ public class AsciiDashboard extends JFrame {
             rows = ascii.isEmpty() ? new String[0] : ascii.split("\n");
             columns = 0;
             for (String row : rows) columns = Math.max(columns, row.length());
+            revalidate();
             repaint();
+        }
+
+        void setColors(ImageInspect.AsciiResult value) {
+            colors = value;
+            repaint();
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            if (fit) return new Dimension(400, 300);
+            int cellWidth = getFontMetrics(getFont()).charWidth('M');
+            return new Dimension(columns * cellWidth + 24, rows.length * cellWidth * 2 + 24);
         }
 
         // Fit the complete character grid, including whitespace padding, at a 1:2 cell ratio.
         Rectangle fittedBounds() {
             if (columns == 0 || rows.length == 0) return new Rectangle();
+            if (!fit) {
+                Dimension size = getPreferredSize();
+                return new Rectangle(12, 12, size.width - 24, size.height - 24);
+            }
             double scale = Math.min(Math.max(0, getWidth() - 24) / (double) columns,
                     Math.max(0, getHeight() - 24) / (2.0 * rows.length));
             int width = (int) Math.floor(columns * scale);
@@ -309,7 +360,16 @@ public class AsciiDashboard extends JFrame {
                 copy.scale(bounds.width / (columns * cellWidth), bounds.height / (rows.length * cellHeight));
                 double baseline = (cellHeight - metrics.getHeight()) / 2 + metrics.getAscent();
                 for (int y = 0; y < rows.length; y++) {
-                    copy.drawString(rows[y], 0f, (float) (y * cellHeight + baseline));
+                    if (colors == null) {
+                        copy.drawString(rows[y], 0f, (float) (y * cellHeight + baseline));
+                    } else {
+                        for (int x = 0; x < rows[y].length(); x++) {
+                            if (rows[y].charAt(x) == ' ') continue;
+                            copy.setColor(new Color(colors.rgbAt(x, y)));
+                            copy.drawString(String.valueOf(rows[y].charAt(x)), (float) (x * cellWidth),
+                                    (float) (y * cellHeight + baseline));
+                        }
+                    }
                 }
             } finally {
                 copy.dispose();

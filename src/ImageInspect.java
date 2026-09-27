@@ -47,6 +47,47 @@ public class ImageInspect {
     private static final String CHARACTERS = " .:-=+*#%@";
     private static final double CONTRAST_CLIP = 0.02;
 
+    public static final class AsciiResult {
+        public final String text;
+        public final int width;
+        public final int height;
+        private final int[] colors;
+
+        private AsciiResult(String text, int width, int height, int[] colors) {
+            this.text = text;
+            this.width = width;
+            this.height = height;
+            this.colors = colors;
+        }
+
+        public int rgbAt(int x, int y) { return colors[y * width + x]; }
+
+        public String toHtml(boolean color) {
+            StringBuilder html = new StringBuilder("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">"
+                    + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+                    + "<title>Galler-Art ASCII</title><style>body{background:#000;color:#e8edf4;margin:24px}"
+                    + "pre{font:16px monospace;line-height:2ch;white-space:pre}"
+                    + "</style><body><pre aria-label=\"ASCII art\">");
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    char character = text.charAt(y * (width + 1) + x);
+                    if (color && character != ' ') {
+                        String hex = Integer.toHexString(rgbAt(x, y));
+                        html.append("<span style=\"color:#").append("0".repeat(6 - hex.length()))
+                                .append(hex).append("\">");
+                    }
+                    if (character == '&') html.append("&amp;");
+                    else if (character == '<') html.append("&lt;");
+                    else if (character == '>') html.append("&gt;");
+                    else html.append(character);
+                    if (color && character != ' ') html.append("</span>");
+                }
+                html.append('\n');
+            }
+            return html.append("</pre></body></html>").toString();
+        }
+    }
+
     public static void main(String[] args) throws IOException {
         File imagefile = new File(args.length > 0 ? args[0] : "Images/img.png");
         if (!imagefile.isFile()) {
@@ -82,6 +123,11 @@ public class ImageInspect {
 
     public static String toAscii(BufferedImage image, int columns, boolean autoContrast,
                                  double contrastClip, boolean invert, OutputFormat format) {
+        return convert(image, columns, autoContrast, contrastClip, invert, format).text;
+    }
+
+    public static AsciiResult convert(BufferedImage image, int columns, boolean autoContrast,
+                                      double contrastClip, boolean invert, OutputFormat format) {
         if (columns < 1) {
             throw new IllegalArgumentException("Columns must be positive.");
         }
@@ -98,6 +144,7 @@ public class ImageInspect {
             height = canvas[1];
         }
         double[] brightnessValues = new double[Math.multiplyExact(width, height)];
+        int[] cellColors = new int[brightnessValues.length];
 
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
@@ -109,6 +156,7 @@ public class ImageInspect {
                 endX = Math.max(startX + 1, endX);
                 endY = Math.max(startY + 1, endY);
                 double totalBrightness = 0;
+                double totalRed = 0, totalGreen = 0, totalBlue = 0;
                 // Include every pixel in this cell, including the image's outer edges.
                 for (int sourceY = startY; sourceY < endY; sourceY++) {
                     for (int sourceX = startX; sourceX < endX; sourceX++) {
@@ -119,10 +167,17 @@ public class ImageInspect {
                         double alpha = ((pixel >>> 24) & 255) / 255.0;
                         // Perceived brightness on a black background.
                         totalBrightness += (0.2126 * red + 0.7152 * green + 0.0722 * blue) * alpha;
+                        totalRed += red * alpha;
+                        totalGreen += green * alpha;
+                        totalBlue += blue * alpha;
                     }
                 }
                 brightnessValues[y * width + x] = totalBrightness
                         / ((long) (endX - startX) * (endY - startY));
+                long count = (long) (endX - startX) * (endY - startY);
+                cellColors[y * width + x] = ((int) Math.round(totalRed / count) << 16)
+                        | ((int) Math.round(totalGreen / count) << 8)
+                        | (int) Math.round(totalBlue / count);
             }
         }
 
@@ -143,6 +198,7 @@ public class ImageInspect {
         }
 
         StringBuilder result = new StringBuilder();
+        int[] outputColors = new int[Math.multiplyExact(canvas[0], canvas[1])];
         int left = (canvas[0] - width) / 2;
         int top = (canvas[1] - height) / 2;
         // Padding is added after contrast calculation so it cannot change the grayscale range.
@@ -162,9 +218,10 @@ public class ImageInspect {
                 }
                 int index = (int) Math.round(normalized * (CHARACTERS.length() - 1));
                 result.append(CHARACTERS.charAt(index));
+                outputColors[canvasY * canvas[0] + canvasX] = cellColors[y * width + x];
             }
             result.append('\n');
         }
-        return result.toString();
+        return new AsciiResult(result.toString(), canvas[0], canvas[1], outputColors);
     }
 }
