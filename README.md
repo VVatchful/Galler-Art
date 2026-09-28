@@ -45,8 +45,18 @@ Choose original proportions to avoid format padding.
 an existing file with the same name. Text previews do not wrap. The original preview
 always fits the image.
 
-PNG, JPEG, BMP, and the first frame of GIF images are supported. Animated output,
-video conversion, and color are not implemented yet.
+Enable **Use original RGB colors** to color the ASCII characters in either preview
+mode. Each cell uses the average red, green, and blue values of its source pixels;
+transparency is composited onto black. Contrast and inversion still control character
+density, while the RGB colors remain those of the image. The color toggle updates
+the preview immediately without another conversion.
+
+**Export HTML** saves `ascii/<image-name>.html` with the selected color mode. Open
+it in a browser to view the colored ASCII. **Export TXT** still saves plain text;
+TXT files cannot store character colors. Existing exports with the same name are replaced.
+
+PNG, JPEG, BMP, and the first frame of GIF images are supported. Animated output
+and video conversion are not implemented yet.
 
 ## Command line
 
@@ -59,4 +69,13 @@ java src/ImageInspect.java Images/img.png 160
 ```powershell
 javac -d out/ascii-checks src/ImageInspect.java tests/ImageInspectTest.java
 java -cp out/ascii-checks ImageInspectTest
+```
+
+To include dashboard and color checks:
+
+```powershell
+javac -d out/ascii-checks src/ImageInspect.java src/AsciiDashboard.java tests/ImageInspectTest.java tests/AsciiDashboardTest.java tests/AsciiColorTest.java
+java -cp out/ascii-checks ImageInspectTest
+java -cp out/ascii-checks AsciiDashboardTest
+java -cp out/ascii-checks AsciiColorTest
 ```
