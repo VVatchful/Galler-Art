@@ -55,14 +55,28 @@ the preview immediately without another conversion.
 it in a browser to view the colored ASCII. **Export TXT** still saves plain text;
 TXT files cannot store character colors. Existing exports with the same name are replaced.
 
-PNG, JPEG, BMP, and the first frame of GIF images are supported. Animated output
-and video conversion are not implemented yet.
+PNG, JPEG, BMP, and all frames of GIF images are supported. GIF frames are composed
+at the full canvas size, respecting offsets, transparency, local palettes, and
+disposal (keep, restore background, or restore previous). Transparent areas use the
+same black background as still-image ASCII conversion.
+
+Importing a GIF generates ASCII for every frame. Use **Frame** to inspect matching
+original and ASCII frames; the label shows the frame count and original delay in
+milliseconds. Changing conversion settings regenerates all frames when you select
+**Generate preview**. RGB colors and both preview modes work with every frame.
+For multi-frame images, TXT and HTML export the selected frame to
+`ascii/<image-name>-frame-0001.txt` or `.html`, using its one-based frame number.
+Frames and ASCII results are held in memory, so large GIFs require more memory.
+Automatic playback, animated export, and video conversion are not implemented yet.
 
 ## Command line
 
 ```powershell
 java src/ImageInspect.java Images/img.png 160
 ```
+
+For GIF input, the command line exports every composed frame as a numbered TXT file.
+Single-frame images keep the original `<image-name>.txt` naming.
 
 ## Converter checks
 
@@ -74,8 +88,9 @@ java -cp out/ascii-checks ImageInspectTest
 To include dashboard and color checks:
 
 ```powershell
-javac -d out/ascii-checks src/ImageInspect.java src/AsciiDashboard.java tests/ImageInspectTest.java tests/AsciiDashboardTest.java tests/AsciiColorTest.java
+javac -d out/ascii-checks src/ImageInspect.java src/AsciiDashboard.java tests/ImageInspectTest.java tests/AsciiDashboardTest.java tests/AsciiColorTest.java tests/GifFramesTest.java
 java -cp out/ascii-checks ImageInspectTest
 java -cp out/ascii-checks AsciiDashboardTest
 java -cp out/ascii-checks AsciiColorTest
+java -cp out/ascii-checks GifFramesTest
 ```

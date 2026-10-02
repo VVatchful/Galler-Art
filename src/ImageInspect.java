@@ -4,10 +4,131 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Iterator;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
+import org.w3c.dom.Node;
+import java.awt.AlphaComposite;
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 
 public class ImageInspect {
+    public static final class ImageFrame {
+        /** Independent, fully composed logical-screen image, before disposal. */
+        public final BufferedImage image;
+        public final int delayMillis;
+
+        private ImageFrame(BufferedImage image, int delayMillis) {
+            this.image = image;
+            this.delayMillis = delayMillis;
+        }
+    }
+
+    /** Reads still images or all GIF frames in display order. */
+    public static List<ImageFrame> readFrames(File file) throws IOException {
+        try (ImageInputStream input = ImageIO.createImageInputStream(file)) {
+            if (input == null) throw new IOException("Cannot open image: " + file);
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) throw new IOException("This file is not a supported image.");
+            ImageReader reader = readers.next();
+            try {
+                reader.setInput(input);
+                if (!reader.getFormatName().equalsIgnoreCase("gif")) {
+                    return List.of(new ImageFrame(reader.read(0), 0));
+                }
+                Node stream = reader.getStreamMetadata().getAsTree("javax_imageio_gif_stream_1.0");
+                Node screen = child(stream, "LogicalScreenDescriptor");
+                int width = number(screen, "logicalScreenWidth", reader.getWidth(0));
+                int height = number(screen, "logicalScreenHeight", reader.getHeight(0));
+                if (width < 1 || height < 1) throw new IOException("Invalid GIF canvas dimensions.");
+                int background = gifBackground(stream);
+                BufferedImage canvas = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+                List<ImageFrame> frames = new ArrayList<>();
+                int count = reader.getNumImages(true);
+                for (int i = 0; i < count; i++) {
+                    Node metadata = reader.getImageMetadata(i).getAsTree("javax_imageio_gif_image_1.0");
+                    Node descriptor = child(metadata, "ImageDescriptor");
+                    Node control = child(metadata, "GraphicControlExtension");
+                    int left = number(descriptor, "imageLeftPosition", 0);
+                    int top = number(descriptor, "imageTopPosition", 0);
+                    String disposal = attribute(control, "disposalMethod", "none");
+                    boolean transparent = "TRUE".equalsIgnoreCase(attribute(control, "transparentColorFlag", "FALSE"));
+                    // Transparent GIFs use a transparent canvas, later composited onto black by ASCII conversion.
+                    int clearColor = transparent ? 0 : background;
+                    if (i == 0) fill(canvas, 0, 0, width, height, clearColor);
+                    BufferedImage previous = "restoreToPrevious".equals(disposal) ? copy(canvas) : null;
+                    BufferedImage patch = reader.read(i);
+                    Graphics2D graphics = canvas.createGraphics();
+                    try {
+                        graphics.drawImage(patch, left, top, null);
+                    } finally {
+                        graphics.dispose();
+                    }
+                    frames.add(new ImageFrame(copy(canvas), number(control, "delayTime", 0) * 10));
+                    // Disposal applies after capturing this frame, before drawing the next one.
+                    if ("restoreToBackgroundColor".equals(disposal)) {
+                        fill(canvas, left, top, patch.getWidth(), patch.getHeight(), clearColor);
+                    } else if (previous != null) {
+                        canvas = previous;
+                    }
+                }
+                if (frames.isEmpty()) throw new IOException("The GIF contains no frames.");
+                return List.copyOf(frames);
+            } finally {
+                reader.dispose();
+            }
+        }
+    }
+
+    private static int gifBackground(Node stream) {
+        Node table = child(stream, "GlobalColorTable");
+        int index = number(table, "backgroundColorIndex", -1);
+        for (Node entry = table == null ? null : table.getFirstChild(); entry != null; entry = entry.getNextSibling()) {
+            if ("ColorTableEntry".equals(entry.getNodeName()) && number(entry, "index", -2) == index) {
+                return 0xff000000 | (number(entry, "red", 0) << 16)
+                        | (number(entry, "green", 0) << 8) | number(entry, "blue", 0);
+            }
+        }
+        return 0;
+    }
+
+    private static Node child(Node parent, String name) {
+        for (Node node = parent == null ? null : parent.getFirstChild(); node != null; node = node.getNextSibling()) {
+            if (name.equals(node.getNodeName())) return node;
+        }
+        return null;
+    }
+
+    private static String attribute(Node node, String name, String fallback) {
+        Node value = node == null ? null : node.getAttributes().getNamedItem(name);
+        return value == null ? fallback : value.getNodeValue();
+    }
+
+    private static int number(Node node, String name, int fallback) {
+        return Integer.parseInt(attribute(node, name, Integer.toString(fallback)));
+    }
+
+    private static void fill(BufferedImage image, int x, int y, int width, int height, int argb) {
+        Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setComposite(AlphaComposite.Src);
+            graphics.setColor(new Color(argb, true));
+            graphics.fillRect(x, y, width, height);
+        } finally {
+            graphics.dispose();
+        }
+    }
+
+    private static BufferedImage copy(BufferedImage image) {
+        BufferedImage result = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        result.setData(image.getData());
+        return result;
+    }
+
     public enum OutputFormat {
         ORIGINAL("Keep original proportions", 0, 0, 160),
         SD("SD - 640 x 480 (4:3)", 640, 480, 80),
@@ -94,22 +215,21 @@ public class ImageInspect {
             System.err.println("Image file not found: " + imagefile);
             return;
         }
-        BufferedImage image = ImageIO.read(imagefile);
-        if (image == null) {
-            System.err.println("Unsupported image format: " + imagefile);
-            return;
-        }
+        List<ImageFrame> frames = readFrames(imagefile);
         int columns = args.length > 1 ? Integer.parseInt(args[1]) : 160;
-        String ascii = toAscii(image, columns);
         Path outputDirectory = Path.of("ascii");
         Files.createDirectories(outputDirectory);
         String filename = imagefile.getName();
         int extensionIndex = filename.lastIndexOf('.');
         String basename = extensionIndex > 0 ? filename.substring(0, extensionIndex) : filename;
-        Path outputFile = outputDirectory.resolve(basename + ".txt");
-        Files.writeString(outputFile, ascii, StandardCharsets.UTF_8);
-        System.out.print(ascii);
-        System.out.println("ASCII saved to: " + outputFile.toAbsolutePath());
+        for (int i = 0; i < frames.size(); i++) {
+            String ascii = toAscii(frames.get(i).image, columns);
+            String suffix = frames.size() > 1 ? String.format("-frame-%04d", i + 1) : "";
+            Path outputFile = outputDirectory.resolve(basename + suffix + ".txt");
+            Files.writeString(outputFile, ascii, StandardCharsets.UTF_8);
+            System.out.print(ascii);
+            System.out.println("ASCII saved to: " + outputFile.toAbsolutePath());
+        }
     }
 
     public static String toAscii(BufferedImage image, int columns) {
