@@ -34,6 +34,11 @@ public class AsciiDashboard extends JFrame {
     private final JLabel filename = new JLabel("No image selected");
     private final JSpinner frame = new JSpinner(new SpinnerNumberModel(1, 1, 1, 1));
     private final JLabel frameInfo = new JLabel("No frames loaded");
+    private final JButton play = new JButton("Play");
+    private final JCheckBox loop = new JCheckBox("Loop", true);
+    private final Timer playbackTimer = new Timer(100, event -> advancePlayback());
+    private boolean playing;
+    private boolean advancingFrame;
     private final ImagePanel original = new ImagePanel();
     private List<ImageInspect.ImageFrame> sourceFrames = List.of();
     private List<ImageInspect.AsciiResult> generatedFrames = List.of();
@@ -67,6 +72,12 @@ public class AsciiDashboard extends JFrame {
         addControl(settings, original);
         addControl(settings, row("Frame", frame));
         addControl(settings, frameInfo);
+        JPanel playbackControls = new JPanel(new GridLayout(1, 2, 8, 0));
+        playbackControls.add(play);
+        playbackControls.add(loop);
+        addControl(settings, playbackControls);
+        play.setToolTipText("Play or pause the original and ASCII frames together.");
+        loop.setToolTipText("Repeat continuously; turn off to stop after the last frame.");
         addControl(settings, new JLabel("OUTPUT OPTIONS"));
         addControl(settings, format);
         format.setToolTipText("Resolution presets set proportions and text detail. The whole image fits with padding.");
@@ -104,7 +115,12 @@ public class AsciiDashboard extends JFrame {
         root.add(status, BorderLayout.SOUTH);
 
         choose.addActionListener(event -> chooseImage());
-        frame.addChangeListener(event -> showFrame());
+        playbackTimer.setRepeats(false);
+        play.addActionListener(event -> togglePlayback());
+        frame.addChangeListener(event -> {
+            if (!advancingFrame) pausePlayback();
+            showFrame();
+        });
         convert.addActionListener(event -> generate());
         export.addActionListener(event -> exportText());
         exportHtml.addActionListener(event -> exportHtml());
@@ -162,8 +178,10 @@ public class AsciiDashboard extends JFrame {
     }
 
     private void invalidatePreview() {
+        pausePlayback();
         updateOutputDimensions();
         generatedFrames = List.of();
+        updatePlaybackControls();
         generated = null;
         generatedResult = null;
         preview.setText("");
@@ -185,6 +203,7 @@ public class AsciiDashboard extends JFrame {
     }
 
     private void setBusy(boolean value) {
+        if (value) pausePlayback();
         busy = value;
         choose.setEnabled(!busy);
         convert.setEnabled(!busy && source != null);
@@ -196,9 +215,71 @@ public class AsciiDashboard extends JFrame {
         clipping.setEnabled(!busy && contrast.isSelected());
         invert.setEnabled(!busy);
         frame.setEnabled(!busy && sourceFrames.size() > 1);
+        updatePlaybackControls();
+    }
+
+    private boolean canPlay() {
+        return !busy && sourceFrames.size() > 1 && generatedFrames.size() == sourceFrames.size();
+    }
+
+    private void updatePlaybackControls() {
+        play.setEnabled(canPlay());
+        play.setText(playing ? "Pause" : "Play");
+        loop.setEnabled(canPlay());
+    }
+
+    private void togglePlayback() {
+        if (playing) {
+            pausePlayback();
+        } else if (canPlay()) {
+            // Replaying a completed sequence starts from the beginning.
+            if ((Integer) frame.getValue() == sourceFrames.size()) frame.setValue(1);
+            playing = true;
+            updatePlaybackControls();
+            scheduleNextFrame();
+        }
+    }
+
+    private void pausePlayback() {
+        playing = false;
+        playbackTimer.stop();
+        updatePlaybackControls();
+    }
+
+    private void scheduleNextFrame() {
+        int delay = sourceFrames.get((Integer) frame.getValue() - 1).delayMillis;
+        // A missing/zero delay must not cause a tight event-loop spin.
+        playbackTimer.setInitialDelay(delay > 0 ? delay : 100);
+        playbackTimer.restart();
+    }
+
+    private void advancePlayback() {
+        if (!playing || !canPlay()) {
+            pausePlayback();
+            return;
+        }
+        int current = (Integer) frame.getValue();
+        if (current == sourceFrames.size() && !loop.isSelected()) {
+            pausePlayback();
+            return;
+        }
+        advancingFrame = true;
+        try {
+            frame.setValue(current == sourceFrames.size() ? 1 : current + 1);
+        } finally {
+            advancingFrame = false;
+        }
+        scheduleNextFrame();
+    }
+
+    @Override
+    public void dispose() {
+        pausePlayback();
+        super.dispose();
     }
 
     private void chooseImage() {
+        pausePlayback();
         JFileChooser chooser = new JFileChooser(new File("Images"));
         chooser.setFileFilter(new FileNameExtensionFilter("Images (PNG, JPG, BMP, GIF)",
                 "png", "jpg", "jpeg", "bmp", "gif"));
@@ -328,6 +409,7 @@ public class AsciiDashboard extends JFrame {
 
     private void exportFile(boolean html) {
         if (generated == null || busy) return;
+        pausePlayback();
         try {
             Path folder = Path.of("ascii");
             Files.createDirectories(folder);

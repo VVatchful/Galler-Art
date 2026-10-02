@@ -67,7 +67,12 @@ milliseconds. Changing conversion settings regenerates all frames when you selec
 For multi-frame images, TXT and HTML export the selected frame to
 `ascii/<image-name>-frame-0001.txt` or `.html`, using its one-based frame number.
 Frames and ASCII results are held in memory, so large GIFs require more memory.
-Automatic playback, animated export, and video conversion are not implemented yet.
+Use **Play** / **Pause** to animate the original and ASCII previews together.
+**Loop** is enabled by default; turn it off to stop on the final frame. Play resumes
+from the selected frame, or restarts from the beginning when the final frame is
+selected. Playback uses each frame's delay, with a 100 ms fallback for zero delays.
+Selecting a frame manually, changing conversion settings, importing, or exporting
+pauses playback. Animated export and video conversion are not implemented yet.
 
 ## Command line
 

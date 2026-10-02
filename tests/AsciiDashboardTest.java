@@ -71,19 +71,93 @@ public class AsciiDashboardTest {
                 check(((java.util.List<?>) field("generatedFrames")).size() == 2, "Options regenerate every frame");
                 ((JSpinner) field("frame")).setValue(2);
             });
+            checkPlayback();
             javax.imageio.ImageIO.write(new BufferedImage(3, 2, BufferedImage.TYPE_INT_RGB), "png", gif.toFile());
-            SwingUtilities.invokeAndWait(() -> dashboard.loadImage(gif.toFile()));
+            SwingUtilities.invokeAndWait(() -> {
+                ((JButton) field("play")).doClick(0);
+                dashboard.loadImage(gif.toFile());
+                check(!((Timer) field("playbackTimer")).isRunning(), "Loading stops playback");
+            });
             awaitPreview();
             SwingUtilities.invokeAndWait(() -> {
                 check(((JSpinner) field("frame")).getValue().equals(1), "New image resets frame selection");
                 check(!((JSpinner) field("frame")).isEnabled(), "Still image disables frame navigation");
                 check(((java.util.List<?>) field("generatedFrames")).size() == 1, "Old animation results removed");
+                check(!((JButton) field("play")).isEnabled(), "Still images cannot play");
+            });
+            GifFramesTest.write(gif,
+                    new GifFramesTest.Patch(6, 4, 1, 0, 0, "none", 0, false),
+                    new GifFramesTest.Patch(2, 2, 2, 2, 0, "none", 7, false));
+            SwingUtilities.invokeAndWait(() -> dashboard.loadImage(gif.toFile()));
+            awaitPreview();
+            SwingUtilities.invokeAndWait(() -> {
+                ((JButton) field("play")).doClick(0);
+                check(((Timer) field("playbackTimer")).getInitialDelay() == 100, "Zero delay has safe fallback");
+                dashboard.dispose();
+                check(!((Timer) field("playbackTimer")).isRunning(), "Disposing stops timer");
             });
             System.out.println("Dashboard checks passed: formats, fit, zoom, GIF import, frame navigation, regeneration, still-image reset.");
         } finally {
             SwingUtilities.invokeAndWait(() -> { if (dashboard != null) dashboard.dispose(); });
             Files.deleteIfExists(gif);
         }
+    }
+
+    private static void checkPlayback() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            JButton play = (JButton) field("play");
+            JCheckBox loop = (JCheckBox) field("loop");
+            JSpinner frame = (JSpinner) field("frame");
+            Timer timer = (Timer) field("playbackTimer");
+            check(play.isEnabled() && loop.isSelected(), "GIF playback enabled with loop on by default");
+            play.doClick(0);
+            check(frame.getValue().equals(1) && play.getText().equals("Pause"), "Play restarts from final frame");
+            check(timer.getInitialDelay() == 30, "First frame uses its delay");
+            tick();
+            check(frame.getValue().equals(2) && timer.getInitialDelay() == 70, "Sequential advance uses next delay");
+            check(field("source") == ((ImageInspect.ImageFrame) ((java.util.List<?>) field("sourceFrames")).get(1)).image,
+                    "Playback updates original");
+            check(field("generatedResult") == ((java.util.List<?>) field("generatedFrames")).get(1),
+                    "Playback updates matching ASCII");
+            tick();
+            check(frame.getValue().equals(1), "Loop wraps to first frame");
+            play.doClick(0);
+            tick();
+            check(frame.getValue().equals(1) && !timer.isRunning(), "Pause ignores pending ticks");
+            loop.setSelected(false);
+            play.doClick(0);
+            tick();
+            check(frame.getValue().equals(2) && play.getText().equals("Pause"), "Last frame receives full delay");
+            tick();
+            check(frame.getValue().equals(2) && play.getText().equals("Play") && !timer.isRunning(),
+                    "Nonlooping playback stops on last frame");
+            play.doClick(0);
+            frame.setValue(2);
+            check(!timer.isRunning(), "Manual selection pauses playback");
+            play.doClick(0);
+            ((JCheckBox) field("invert")).doClick(0);
+            check(!timer.isRunning() && !play.isEnabled(), "Option changes stop and disable stale playback");
+            ((JButton) field("convert")).doClick(0);
+        });
+        awaitPreview();
+        java.util.concurrent.CountDownLatch advanced = new java.util.concurrent.CountDownLatch(1);
+        javax.swing.event.ChangeListener observer = event -> advanced.countDown();
+        SwingUtilities.invokeAndWait(() -> {
+            ((JSpinner) field("frame")).setValue(1);
+            ((JSpinner) field("frame")).addChangeListener(observer);
+            ((JButton) field("play")).doClick(0);
+        });
+        check(advanced.await(3, java.util.concurrent.TimeUnit.SECONDS), "Real Swing timer advances frames");
+        SwingUtilities.invokeAndWait(() -> {
+            ((JSpinner) field("frame")).removeChangeListener(observer);
+            if ((Boolean) field("playing")) ((JButton) field("play")).doClick(0);
+        });
+    }
+
+    private static void tick() {
+        Timer timer = (Timer) field("playbackTimer");
+        timer.stop();
+        for (java.awt.event.ActionListener listener : timer.getActionListeners()) listener.actionPerformed(null);
     }
 
     private static void awaitPreview() throws Exception {
