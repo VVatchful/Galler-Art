@@ -11,7 +11,13 @@ import javax.swing.border.EmptyBorder;
 import javax.swing.filechooser.FileNameExtensionFilter;
 
 public class AsciiDashboard extends JFrame {
-    private final JButton choose = new JButton("Choose image...");
+    private final JButton choose = new JButton("Choose image or MP4...");
+    private final JComboBox<String> videoScale = new JComboBox<>(new String[] {"25%", "50%", "100%", "150%", "200%"});
+    private final JSpinner videoFps = new JSpinner(new SpinnerNumberModel(24.0, 1.0, 120.0, 1.0));
+    private final JLabel videoInfo = new JLabel("MP4: on-demand frames, silent preview");
+    private VideoSource video;
+    private boolean updatingVideo;
+    private boolean disposed;
     private final JButton convert = new JButton("Generate preview");
     private final JButton export = new JButton("Export TXT");
     private final JButton exportHtml = new JButton("Export HTML");
@@ -38,6 +44,7 @@ public class AsciiDashboard extends JFrame {
     private final JCheckBox loop = new JCheckBox("Loop", true);
     private final Timer playbackTimer = new Timer(100, event -> advancePlayback());
     private boolean playing;
+    private boolean pendingVideoPlayback;
     private boolean advancingFrame;
     private final ImagePanel original = new ImagePanel();
     private List<ImageInspect.ImageFrame> sourceFrames = List.of();
@@ -64,12 +71,18 @@ public class AsciiDashboard extends JFrame {
 
         JPanel settings = new JPanel();
         settings.setLayout(new BoxLayout(settings, BoxLayout.Y_AXIS));
-        addControl(settings, new JLabel("SOURCE IMAGE"));
+        addControl(settings, new JLabel("SOURCE MEDIA"));
         addControl(settings, choose);
         addControl(settings, filename);
         original.setPreferredSize(new Dimension(220, 165));
         original.setMaximumSize(new Dimension(Integer.MAX_VALUE, 165));
         addControl(settings, original);
+        videoScale.setSelectedItem("100%");
+        addControl(settings, row("Video pixel scale", videoScale));
+        addControl(settings, row("Video preview FPS", videoFps));
+        addControl(settings, videoInfo);
+        videoScale.setToolTipText("Resize decoded MP4 pixels before ASCII conversion. ASCII width controls text detail.");
+        videoFps.setToolTipText("Sample frames at this rate. Playback can be slower while frames are decoded.");
         addControl(settings, row("Frame", frame));
         addControl(settings, frameInfo);
         JPanel playbackControls = new JPanel(new GridLayout(1, 2, 8, 0));
@@ -118,9 +131,12 @@ public class AsciiDashboard extends JFrame {
         playbackTimer.setRepeats(false);
         play.addActionListener(event -> togglePlayback());
         frame.addChangeListener(event -> {
+            if (updatingVideo) return;
             if (!advancingFrame) pausePlayback();
             showFrame();
         });
+        videoScale.addActionListener(event -> videoOptionsChanged());
+        videoFps.addChangeListener(event -> videoOptionsChanged());
         convert.addActionListener(event -> generate());
         export.addActionListener(event -> exportText());
         exportHtml.addActionListener(event -> exportHtml());
@@ -214,26 +230,55 @@ public class AsciiDashboard extends JFrame {
         contrast.setEnabled(!busy);
         clipping.setEnabled(!busy && contrast.isSelected());
         invert.setEnabled(!busy);
-        frame.setEnabled(!busy && sourceFrames.size() > 1);
+        frame.setEnabled(!busy && totalFrames() > 1);
+        videoScale.setEnabled(!busy && video != null);
+        videoFps.setEnabled(!busy && video != null);
         updatePlaybackControls();
     }
 
     private boolean canPlay() {
-        return !busy && sourceFrames.size() > 1 && generatedFrames.size() == sourceFrames.size();
+        return !busy && (video != null ? totalFrames() > 1 && generated != null
+                : sourceFrames.size() > 1 && generatedFrames.size() == sourceFrames.size());
+    }
+
+    private int totalFrames() {
+        return video == null ? sourceFrames.size() : video.frameCount(((Number) videoFps.getValue()).doubleValue());
+    }
+
+    private double selectedVideoScale() {
+        return Double.parseDouble(((String) videoScale.getSelectedItem()).replace("%", "")) / 100;
+    }
+
+    private void videoOptionsChanged() {
+        if (video == null || busy || updatingVideo) return;
+        pausePlayback();
+        updatingVideo = true;
+        frame.setModel(new SpinnerNumberModel(1, 1, totalFrames(), 1));
+        updatingVideo = false;
+        invalidatePreview();
+        generate();
     }
 
     private void updatePlaybackControls() {
-        play.setEnabled(canPlay());
-        play.setText(playing ? "Pause" : "Play");
+        play.setEnabled(canPlay() || pendingVideoPlayback);
+        play.setText(playing || pendingVideoPlayback ? "Pause" : "Play");
         loop.setEnabled(canPlay());
     }
 
     private void togglePlayback() {
-        if (playing) {
+        if (playing || pendingVideoPlayback) {
             pausePlayback();
         } else if (canPlay()) {
             // Replaying a completed sequence starts from the beginning.
-            if ((Integer) frame.getValue() == sourceFrames.size()) frame.setValue(1);
+            if ((Integer) frame.getValue() == totalFrames()) {
+                if (video != null) {
+                    playing = true;
+                    advancingFrame = true;
+                    try { frame.setValue(1); } finally { advancingFrame = false; }
+                    return;
+                }
+                frame.setValue(1);
+            }
             playing = true;
             updatePlaybackControls();
             scheduleNextFrame();
@@ -242,12 +287,14 @@ public class AsciiDashboard extends JFrame {
 
     private void pausePlayback() {
         playing = false;
+        pendingVideoPlayback = false;
         playbackTimer.stop();
         updatePlaybackControls();
     }
 
     private void scheduleNextFrame() {
-        int delay = sourceFrames.get((Integer) frame.getValue() - 1).delayMillis;
+        int delay = video == null ? sourceFrames.get((Integer) frame.getValue() - 1).delayMillis
+                : (int) Math.round(1000 / ((Number) videoFps.getValue()).doubleValue());
         // A missing/zero delay must not cause a tight event-loop spin.
         playbackTimer.setInitialDelay(delay > 0 ? delay : 100);
         playbackTimer.restart();
@@ -259,36 +306,42 @@ public class AsciiDashboard extends JFrame {
             return;
         }
         int current = (Integer) frame.getValue();
-        if (current == sourceFrames.size() && !loop.isSelected()) {
+        if (current == totalFrames() && !loop.isSelected()) {
             pausePlayback();
             return;
         }
         advancingFrame = true;
         try {
-            frame.setValue(current == sourceFrames.size() ? 1 : current + 1);
+            frame.setValue(current == totalFrames() ? 1 : current + 1);
         } finally {
             advancingFrame = false;
         }
-        scheduleNextFrame();
+        if (video == null) scheduleNextFrame();
     }
 
     @Override
     public void dispose() {
+        disposed = true;
         pausePlayback();
+        if (video != null) video.close();
         super.dispose();
     }
 
     private void chooseImage() {
         pausePlayback();
         JFileChooser chooser = new JFileChooser(new File("Images"));
-        chooser.setFileFilter(new FileNameExtensionFilter("Images (PNG, JPG, BMP, GIF)",
-                "png", "jpg", "jpeg", "bmp", "gif"));
+        chooser.setFileFilter(new FileNameExtensionFilter("Images and movies (PNG, JPG, BMP, GIF, MP4)",
+                "png", "jpg", "jpeg", "bmp", "gif", "mp4"));
         if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
         loadImage(chooser.getSelectedFile());
     }
 
     void loadImage(File selected) {
         if (busy) return;
+        if (selected.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".mp4")) {
+            loadVideo(selected);
+            return;
+        }
         setBusy(true);
         status.setText("Loading " + selected.getName() + "...");
         new SwingWorker<List<ImageInspect.ImageFrame>, Void>() {
@@ -300,6 +353,8 @@ public class AsciiDashboard extends JFrame {
                 boolean loaded = false;
                 try {
                     List<ImageInspect.ImageFrame> loadedFrames = get();
+                    if (video != null) video.close();
+                    video = null;
                     generatedFrames = List.of();
                     sourceFrames = loadedFrames;
                     frame.setModel(new SpinnerNumberModel(1, 1, sourceFrames.size(), 1));
@@ -330,6 +385,10 @@ public class AsciiDashboard extends JFrame {
 
     private void generate() {
         if (source == null || busy) return;
+        if (video != null) {
+            generateVideoFrame();
+            return;
+        }
         try {
             columns.commitEdit();
             clipping.commitEdit();
@@ -372,7 +431,132 @@ public class AsciiDashboard extends JFrame {
         }.execute();
     }
 
+    private void loadVideo(File selected) {
+        setBusy(true);
+        status.setText("Opening MP4...");
+        new SwingWorker<VideoSource, Void>() {
+            private VideoSource opened;
+            private BufferedImage first;
+            protected VideoSource doInBackground() throws Exception {
+                opened = new VideoSource(selected);
+                try {
+                    first = opened.readFrame(0, Math.max(1, Math.min(120, opened.sourceFps)), 1);
+                    return opened;
+                } catch (Exception exception) {
+                    opened.close();
+                    throw exception;
+                }
+            }
+            protected void done() {
+                boolean loaded = false;
+                try {
+                    VideoSource result = get();
+                    if (disposed) { result.close(); return; }
+                    if (video != null) video.close();
+                    video = result;
+                    sourceFrames = List.of();
+                    generatedFrames = List.of();
+                    source = first;
+                    sourceFile = selected;
+                    original.image = first;
+                    original.repaint();
+                    filename.setText(selected.getName());
+                    filename.setToolTipText(selected.getAbsolutePath());
+                    updatingVideo = true;
+                    videoScale.setSelectedItem("100%");
+                    videoFps.setValue(Math.max(1, Math.min(120, video.sourceFps)));
+                    frame.setModel(new SpinnerNumberModel(1, 1, totalFrames(), 1));
+                    updatingVideo = false;
+                    videoInfo.setText(String.format(java.util.Locale.ROOT, "%d x %d | %.1f s | %.2f FPS",
+                            video.width, video.height, video.duration, video.sourceFps));
+                    invalidatePreview();
+                    loaded = true;
+                } catch (Exception exception) {
+                    if (!disposed) showError(exception);
+                } finally {
+                    updatingVideo = false;
+                    setBusy(false);
+                }
+                if (loaded) generateVideoFrame();
+            }
+        }.execute();
+    }
+
+    private void generateVideoFrame() {
+        if (video == null || busy || disposed) return;
+        try {
+            columns.commitEdit();
+            clipping.commitEdit();
+            // FPS edits are committed by the spinner; do not trigger a nested generation here.
+        } catch (java.text.ParseException exception) {
+            showError(new IllegalArgumentException("Enter valid numeric options."));
+            return;
+        }
+        VideoSource currentVideo = video;
+        int index = (Integer) frame.getValue() - 1;
+        double fps = ((Number) videoFps.getValue()).doubleValue();
+        double scale = selectedVideoScale();
+        int width = (Integer) columns.getValue();
+        boolean enhance = contrast.isSelected();
+        double clip = ((Number) clipping.getValue()).doubleValue() / 100;
+        boolean reverse = invert.isSelected();
+        ImageInspect.OutputFormat selectedFormat = (ImageInspect.OutputFormat) format.getSelectedItem();
+        boolean resume = playing && advancingFrame;
+        long started = System.nanoTime();
+        setBusy(true);
+        pendingVideoPlayback = resume;
+        updatePlaybackControls();
+        status.setText("Decoding and converting video frame " + (index + 1) + "...");
+        new SwingWorker<ImageInspect.AsciiResult, Void>() {
+            private BufferedImage decoded;
+            protected ImageInspect.AsciiResult doInBackground() throws Exception {
+                decoded = currentVideo.readFrame(index, fps, scale);
+                return ImageInspect.convert(decoded, width, enhance, clip, reverse, selectedFormat);
+            }
+            protected void done() {
+                boolean success = false;
+                try {
+                    ImageInspect.AsciiResult result = get();
+                    if (disposed || currentVideo != video) return;
+                    source = decoded;
+                    original.image = decoded;
+                    original.repaint();
+                    generatedResult = result;
+                    generated = result.text;
+                    preview.setText(generated);
+                    fittedPreview.setAscii(generated);
+                    zoomPreview.setAscii(generated);
+                    refreshColor();
+                    updateOutputDimensions();
+                    frameInfo.setText(String.format(java.util.Locale.ROOT, "Frame %d / %d | %.2f s", index + 1,
+                            totalFrames(), index / fps));
+                    status.setText(decoded.getWidth() + " x " + decoded.getHeight() + " decoded pixels | "
+                            + result.width + " columns x " + result.height + " rows | Silent video preview");
+                    success = true;
+                } catch (Exception exception) {
+                    invalidatePreview();
+                    if (!disposed) showError(exception);
+                } finally {
+                    setBusy(false);
+                    if (disposed) currentVideo.close();
+                }
+                if (success && resume && pendingVideoPlayback && !disposed) {
+                    pendingVideoPlayback = false;
+                    playing = true;
+                    updatePlaybackControls();
+                    long elapsed = (System.nanoTime() - started) / 1_000_000;
+                    playbackTimer.setInitialDelay((int) Math.max(1, Math.round(1000 / fps) - elapsed));
+                    playbackTimer.restart();
+                }
+            }
+        }.execute();
+    }
+
     private void showFrame() {
+        if (video != null) {
+            generateVideoFrame();
+            return;
+        }
         int index = (Integer) frame.getValue() - 1;
         if (!sourceFrames.isEmpty()) {
             ImageInspect.ImageFrame selected = sourceFrames.get(index);
@@ -415,7 +599,7 @@ public class AsciiDashboard extends JFrame {
             Files.createDirectories(folder);
             String name = sourceFile.getName();
             int dot = name.lastIndexOf('.');
-            String suffix = sourceFrames.size() > 1 ? String.format("-frame-%04d", (Integer) frame.getValue()) : "";
+            String suffix = totalFrames() > 1 ? String.format("-frame-%04d", (Integer) frame.getValue()) : "";
             Path output = folder.resolve((dot > 0 ? name.substring(0, dot) : name) + suffix + (html ? ".html" : ".txt"));
             Files.writeString(output, html ? generatedResult.toHtml(color.isSelected()) : generated, StandardCharsets.UTF_8);
             status.setText("Saved " + output.toAbsolutePath());
