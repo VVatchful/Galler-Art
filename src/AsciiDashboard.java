@@ -4,7 +4,8 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import javax.imageio.ImageIO;
+import java.util.ArrayList;
+import java.util.List;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.filechooser.FileNameExtensionFilter;
@@ -31,7 +32,16 @@ public class AsciiDashboard extends JFrame {
     private final JPanel previewViews = new JPanel(previewLayout);
     private final JLabel status = new JLabel("Choose an image to get started.");
     private final JLabel filename = new JLabel("No image selected");
+    private final JSpinner frame = new JSpinner(new SpinnerNumberModel(1, 1, 1, 1));
+    private final JLabel frameInfo = new JLabel("No frames loaded");
+    private final JButton play = new JButton("Play");
+    private final JCheckBox loop = new JCheckBox("Loop", true);
+    private final Timer playbackTimer = new Timer(100, event -> advancePlayback());
+    private boolean playing;
+    private boolean advancingFrame;
     private final ImagePanel original = new ImagePanel();
+    private List<ImageInspect.ImageFrame> sourceFrames = List.of();
+    private List<ImageInspect.AsciiResult> generatedFrames = List.of();
     private BufferedImage source;
     private File sourceFile;
     private String generated;
@@ -60,6 +70,14 @@ public class AsciiDashboard extends JFrame {
         original.setPreferredSize(new Dimension(220, 165));
         original.setMaximumSize(new Dimension(Integer.MAX_VALUE, 165));
         addControl(settings, original);
+        addControl(settings, row("Frame", frame));
+        addControl(settings, frameInfo);
+        JPanel playbackControls = new JPanel(new GridLayout(1, 2, 8, 0));
+        playbackControls.add(play);
+        playbackControls.add(loop);
+        addControl(settings, playbackControls);
+        play.setToolTipText("Play or pause the original and ASCII frames together.");
+        loop.setToolTipText("Repeat continuously; turn off to stop after the last frame.");
         addControl(settings, new JLabel("OUTPUT OPTIONS"));
         addControl(settings, format);
         format.setToolTipText("Resolution presets set proportions and text detail. The whole image fits with padding.");
@@ -97,6 +115,12 @@ public class AsciiDashboard extends JFrame {
         root.add(status, BorderLayout.SOUTH);
 
         choose.addActionListener(event -> chooseImage());
+        playbackTimer.setRepeats(false);
+        play.addActionListener(event -> togglePlayback());
+        frame.addChangeListener(event -> {
+            if (!advancingFrame) pausePlayback();
+            showFrame();
+        });
         convert.addActionListener(event -> generate());
         export.addActionListener(event -> exportText());
         exportHtml.addActionListener(event -> exportHtml());
@@ -154,8 +178,16 @@ public class AsciiDashboard extends JFrame {
     }
 
     private void invalidatePreview() {
+        pausePlayback();
         updateOutputDimensions();
+        generatedFrames = List.of();
+        updatePlaybackControls();
         generated = null;
+        generatedResult = null;
+        preview.setText("");
+        fittedPreview.setAscii("");
+        zoomPreview.setAscii("");
+        refreshColor();
         export.setEnabled(false);
         exportHtml.setEnabled(false);
         if (source != null) {
@@ -171,6 +203,7 @@ public class AsciiDashboard extends JFrame {
     }
 
     private void setBusy(boolean value) {
+        if (value) pausePlayback();
         busy = value;
         choose.setEnabled(!busy);
         convert.setEnabled(!busy && source != null);
@@ -181,27 +214,96 @@ public class AsciiDashboard extends JFrame {
         contrast.setEnabled(!busy);
         clipping.setEnabled(!busy && contrast.isSelected());
         invert.setEnabled(!busy);
+        frame.setEnabled(!busy && sourceFrames.size() > 1);
+        updatePlaybackControls();
+    }
+
+    private boolean canPlay() {
+        return !busy && sourceFrames.size() > 1 && generatedFrames.size() == sourceFrames.size();
+    }
+
+    private void updatePlaybackControls() {
+        play.setEnabled(canPlay());
+        play.setText(playing ? "Pause" : "Play");
+        loop.setEnabled(canPlay());
+    }
+
+    private void togglePlayback() {
+        if (playing) {
+            pausePlayback();
+        } else if (canPlay()) {
+            // Replaying a completed sequence starts from the beginning.
+            if ((Integer) frame.getValue() == sourceFrames.size()) frame.setValue(1);
+            playing = true;
+            updatePlaybackControls();
+            scheduleNextFrame();
+        }
+    }
+
+    private void pausePlayback() {
+        playing = false;
+        playbackTimer.stop();
+        updatePlaybackControls();
+    }
+
+    private void scheduleNextFrame() {
+        int delay = sourceFrames.get((Integer) frame.getValue() - 1).delayMillis;
+        // A missing/zero delay must not cause a tight event-loop spin.
+        playbackTimer.setInitialDelay(delay > 0 ? delay : 100);
+        playbackTimer.restart();
+    }
+
+    private void advancePlayback() {
+        if (!playing || !canPlay()) {
+            pausePlayback();
+            return;
+        }
+        int current = (Integer) frame.getValue();
+        if (current == sourceFrames.size() && !loop.isSelected()) {
+            pausePlayback();
+            return;
+        }
+        advancingFrame = true;
+        try {
+            frame.setValue(current == sourceFrames.size() ? 1 : current + 1);
+        } finally {
+            advancingFrame = false;
+        }
+        scheduleNextFrame();
+    }
+
+    @Override
+    public void dispose() {
+        pausePlayback();
+        super.dispose();
     }
 
     private void chooseImage() {
+        pausePlayback();
         JFileChooser chooser = new JFileChooser(new File("Images"));
         chooser.setFileFilter(new FileNameExtensionFilter("Images (PNG, JPG, BMP, GIF)",
                 "png", "jpg", "jpeg", "bmp", "gif"));
         if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
-        File selected = chooser.getSelectedFile();
+        loadImage(chooser.getSelectedFile());
+    }
+
+    void loadImage(File selected) {
+        if (busy) return;
         setBusy(true);
         status.setText("Loading " + selected.getName() + "...");
-        new SwingWorker<BufferedImage, Void>() {
-            protected BufferedImage doInBackground() throws Exception {
-                BufferedImage image = ImageIO.read(selected);
-                if (image == null) throw new IllegalArgumentException("This file is not a supported image.");
-                return image;
+        new SwingWorker<List<ImageInspect.ImageFrame>, Void>() {
+            protected List<ImageInspect.ImageFrame> doInBackground() throws Exception {
+                return ImageInspect.readFrames(selected);
             }
 
             protected void done() {
                 boolean loaded = false;
                 try {
-                    source = get();
+                    List<ImageInspect.ImageFrame> loadedFrames = get();
+                    generatedFrames = List.of();
+                    sourceFrames = loadedFrames;
+                    frame.setModel(new SpinnerNumberModel(1, 1, sourceFrames.size(), 1));
+                    source = sourceFrames.get(0).image;
                     sourceFile = selected;
                     filename.setText(selected.getName());
                     filename.setToolTipText(selected.getAbsolutePath());
@@ -214,6 +316,7 @@ public class AsciiDashboard extends JFrame {
                     fittedPreview.setAscii("");
                     zoomPreview.setAscii("");
                     refreshColor();
+                    showFrame();
                     loaded = true;
                 } catch (Exception exception) {
                     showError(exception);
@@ -241,24 +344,25 @@ public class AsciiDashboard extends JFrame {
         ImageInspect.OutputFormat selectedFormat = (ImageInspect.OutputFormat) format.getSelectedItem();
         setBusy(true);
         status.setText("Generating ASCII...");
-        new SwingWorker<ImageInspect.AsciiResult, Void>() {
-            protected ImageInspect.AsciiResult doInBackground() {
-                return ImageInspect.convert(source, width, enhance, clip, reverse, selectedFormat);
+        new SwingWorker<List<ImageInspect.AsciiResult>, Void>() {
+            protected List<ImageInspect.AsciiResult> doInBackground() {
+                List<ImageInspect.AsciiResult> results = new ArrayList<>();
+                if (sourceFrames.isEmpty()) {
+                    results.add(ImageInspect.convert(source, width, enhance, clip, reverse, selectedFormat));
+                } else {
+                    for (ImageInspect.ImageFrame sourceFrame : sourceFrames) {
+                        results.add(ImageInspect.convert(sourceFrame.image, width, enhance, clip, reverse, selectedFormat));
+                    }
+                }
+                return List.copyOf(results);
             }
 
             protected void done() {
                 try {
-                    generatedResult = get();
-                    generated = generatedResult.text;
-                    preview.setText(generated);
-                    fittedPreview.setAscii(generated);
-                    zoomPreview.setAscii(generated);
-                    refreshColor();
-                    preview.setCaretPosition(0);
-                    status.setText(source.getWidth() + " x " + source.getHeight() + " pixels  |  "
-                            + generated.indexOf('\n') + " columns x " + generated.lines().count()
-                            + " rows  |  GIF files use the first frame.");
+                    generatedFrames = get();
+                    showFrame();
                 } catch (Exception exception) {
+                    generatedFrames = List.of();
                     generated = null;
                     showError(exception);
                 } finally {
@@ -266,6 +370,33 @@ public class AsciiDashboard extends JFrame {
                 }
             }
         }.execute();
+    }
+
+    private void showFrame() {
+        int index = (Integer) frame.getValue() - 1;
+        if (!sourceFrames.isEmpty()) {
+            ImageInspect.ImageFrame selected = sourceFrames.get(index);
+            source = selected.image;
+            original.image = source;
+            original.repaint();
+            frameInfo.setText("Frame " + (index + 1) + " of " + sourceFrames.size()
+                    + " | " + selected.delayMillis + " ms");
+        }
+        generatedResult = generatedFrames.isEmpty() ? null : generatedFrames.get(index);
+        generated = generatedResult == null ? null : generatedResult.text;
+        String text = generated == null ? "" : generated;
+        preview.setText(text);
+        fittedPreview.setAscii(text);
+        zoomPreview.setAscii(text);
+        refreshColor();
+        preview.setCaretPosition(0);
+        export.setEnabled(!busy && generated != null);
+        exportHtml.setEnabled(!busy && generated != null);
+        if (generatedResult != null) {
+            status.setText(source.getWidth() + " x " + source.getHeight() + " pixels | "
+                    + generatedResult.width + " columns x " + generatedResult.height + " rows | "
+                    + generatedFrames.size() + " frame(s) converted. Export saves the selected frame.");
+        }
     }
 
     private void exportText() {
@@ -278,12 +409,14 @@ public class AsciiDashboard extends JFrame {
 
     private void exportFile(boolean html) {
         if (generated == null || busy) return;
+        pausePlayback();
         try {
             Path folder = Path.of("ascii");
             Files.createDirectories(folder);
             String name = sourceFile.getName();
             int dot = name.lastIndexOf('.');
-            Path output = folder.resolve((dot > 0 ? name.substring(0, dot) : name) + (html ? ".html" : ".txt"));
+            String suffix = sourceFrames.size() > 1 ? String.format("-frame-%04d", (Integer) frame.getValue()) : "";
+            Path output = folder.resolve((dot > 0 ? name.substring(0, dot) : name) + suffix + (html ? ".html" : ".txt"));
             Files.writeString(output, html ? generatedResult.toHtml(color.isSelected()) : generated, StandardCharsets.UTF_8);
             status.setText("Saved " + output.toAbsolutePath());
         } catch (Exception exception) {
