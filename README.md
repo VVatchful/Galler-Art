@@ -13,7 +13,7 @@ From PowerShell in the project folder:
 Or run `AsciiDashboard.main()` in IntelliJ. You can also compile and launch manually:
 
 ```powershell
-javac -d out/dashboard src/ImageInspect.java src/AsciiDashboard.java
+javac -d out/dashboard src/ImageInspect.java src/VideoSource.java src/AsciiDashboard.java
 java -cp out/dashboard AsciiDashboard
 ```
 
@@ -72,7 +72,53 @@ Use **Play** / **Pause** to animate the original and ASCII previews together.
 from the selected frame, or restarts from the beginning when the final frame is
 selected. Playback uses each frame's delay, with a 100 ms fallback for zero delays.
 Selecting a frame manually, changing conversion settings, importing, or exporting
-pauses playback. Animated export and video conversion are not implemented yet.
+pauses playback. Animated export is not implemented yet.
+
+## MP4 movies
+
+Use **Choose image or MP4...** to open a local downloaded MP4. Video decoding uses
+FFmpeg and ffprobe, with Windows builds linked from the
+[FFmpeg download page](https://ffmpeg.org/download.html). Install them locally once:
+
+```powershell
+.\setup-ffmpeg.ps1
+.\run-dashboard.ps1
+```
+
+The setup script downloads the Gyan essentials build into the project and puts the
+executables in `tools/ffmpeg/bin`; it does not modify the system PATH. Alternatively,
+install both tools on PATH or set `FFMPEG_PATH` and `FFPROBE_PATH` to their executable
+paths. Downloaded tools and build output are excluded from Git.
+
+MP4 import displays source dimensions, duration, and average FPS. Each requested
+frame is decoded and converted in a background worker. Only the current decoded
+frame and ASCII result are retained, so memory usage does not grow with movie length.
+The decoder uses temporary files, cleaned up on replacement or window close.
+
+- **Video pixel scale** offers 25%, 50%, 100%, 150%, and 200%, preserving proportions.
+  This resizes the decoded source pixels using Lanczos interpolation. Upscaling
+  increases pixel dimensions but cannot recover missing source detail. Scaled frames
+  are limited to 33 megapixels and 16384 pixels on either side.
+- **Video preview FPS** initially uses the source average rate (limited to 1–120).
+  Lower it for fewer sampled frames and lighter playback. Frame N samples time
+  `(N - 1) / FPS`; variable-frame-rate sources are sampled on this regular timeline.
+- **Resolution format** and **Width (characters)** independently control ASCII
+  dimensions. For example, 1080p maps to 240 columns by 68 rows. These are text
+  dimensions, not the resolution of an exported MP4.
+- **Frame**, **Play / Pause**, and **Loop** work with movies. Original and ASCII
+  views show the same frame; RGB, contrast, fit preview, and manual zoom still apply.
+- Pixel scale and FPS changes reset to the first frame and regenerate automatically.
+  Format changes regenerate the current frame. Other conversion options use
+  **Generate preview** as before.
+
+Playback is a silent, best-effort preview. This first decoder seeks and launches
+FFmpeg for each requested frame, so high FPS or large resolutions can play slower
+than real time. Lower the FPS, pixel scale, or ASCII width when needed. Pause also
+works while a frame is decoding; that frame may finish but playback will stop.
+Decoding has a 30-second timeout per request.
+
+TXT and HTML export the selected movie frame with a numbered filename, just like
+GIFs. Whole-movie export, audio playback, and downloading video URLs are not included.
 
 ## Command line
 
@@ -93,9 +139,13 @@ java -cp out/ascii-checks ImageInspectTest
 To include dashboard and color checks:
 
 ```powershell
-javac -d out/ascii-checks src/ImageInspect.java src/AsciiDashboard.java tests/ImageInspectTest.java tests/AsciiDashboardTest.java tests/AsciiColorTest.java tests/GifFramesTest.java
+javac -d out/ascii-checks src/ImageInspect.java src/VideoSource.java src/AsciiDashboard.java tests/ImageInspectTest.java tests/AsciiDashboardTest.java tests/AsciiColorTest.java tests/GifFramesTest.java tests/VideoSourceTest.java
 java -cp out/ascii-checks ImageInspectTest
 java -cp out/ascii-checks AsciiDashboardTest
 java -cp out/ascii-checks AsciiColorTest
 java -cp out/ascii-checks GifFramesTest
+java -cp out/ascii-checks VideoSourceTest
 ```
+
+The MP4 test requires FFmpeg and generates its own short video fixture. It checks
+decoding, seeking, up/downscaling, final-frame access, and dashboard playback.
