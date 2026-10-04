@@ -1,0 +1,13 @@
+# Same settings as batch.json. Paths are relative to this config file.
+preset: hd
+autoContrast: true
+clip: 0.02
+invert: false
+color: true
+format: html
+fps: 12
+scale: 0.5
+maxFrames: 0
+recursive: true
+overwrite: false
+outputDir: ../ascii/batch
