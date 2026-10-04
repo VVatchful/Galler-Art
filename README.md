@@ -122,6 +122,104 @@ GIFs. Whole-movie export, audio playback, and downloading video URLs are not inc
 
 ## Command line
 
+The batch CLI supports still images, all GIF frames, and sampled MP4 frames:
+
+```powershell
+# Convert a directory using a reusable preset/configuration.
+.\run-cli.ps1 --batch .\Images --config .\configs\batch.yaml
+
+# Override settings for this run; JSON and YAML use the same schema.
+.\run-cli.ps1 --batch .\Media --recursive --config .\configs\batch.json --preset 1080p --columns 200 --fps 6 --max-frames 120
+
+# Save plain text files (default output format).
+.\run-cli.ps1 --batch .\Images --preset hd --output-dir .\ascii\text
+
+# Pipe a single ASCII image or structured frames into another workflow.
+.\run-cli.ps1 .\Images\img.png --columns 100 --stdout > picture.txt
+.\run-cli.ps1 --batch .\Media --recursive --format jsonl --color --fps 6 --stdout > frames.jsonl
+
+# Preview the options.
+.\run-cli.ps1 --help
+```
+
+The launcher compiles the CLI to `out/cli` and preserves your working directory.
+For repeated runs, compile once and invoke Java directly:
+
+```powershell
+javac -d out/cli src/ImageInspect.java src/VideoSource.java src/ConversionConfig.java src/AsciiCli.java
+java -cp out/cli AsciiCli --batch Images --preset hd --stdout
+```
+
+MP4s need FFmpeg/ffprobe as described above. When running outside the project root,
+set `FFMPEG_PATH` and `FFPROBE_PATH` to absolute executable paths or put them on PATH.
+
+### Configuration and precedence
+
+Examples: [`configs/batch.json`](configs/batch.json) and
+[`configs/batch.yaml`](configs/batch.yaml). Both describe the same conversion.
+Configurations are flat mappings of scalar values. JSON strings/numbers/booleans
+and YAML plain/quoted scalars and comments are supported. Nested mappings, arrays,
+YAML anchors/tags, multiple documents, and null values are not supported. Unknown
+or duplicate keys and invalid values produce a settings error before conversion.
+
+Explicit CLI settings override config values, which override defaults. The selected
+preset supplies the default width only when `columns` is not explicitly set in either
+the config or CLI. Config `outputDir` is relative to the config file; CLI paths are
+relative to the current working directory. Input is always supplied on the command line.
+
+| Config key | CLI option | Default / meaning |
+| --- | --- | --- |
+| `preset` | `--preset` | `original`; also `sd`, `hd`/`720p`, `full-hd`/`1080p`, `qhd`, `uhd`/`4k`, `square`, `portrait`, `vertical` |
+| `columns` | `--columns` | Preset width; 1–2000 characters, at most 4 million cells per frame |
+| `autoContrast` | `--contrast` / `--no-contrast` | `true` |
+| `clip` | `--clip` | `0.02`, fraction clipped at each end; 0 through 0.499999 |
+| `invert` | `--invert` / `--no-invert` | `false` |
+| `color` | `--color` / `--no-color` | `false`; requires HTML or JSONL |
+| `fps` | `--fps` | `0`: source average FPS limited to 1–120; otherwise 1–120, MP4 only |
+| `scale` | `--scale` | `1.0`; 0.125–4.0 decoded pixel scale, MP4 only |
+| `maxFrames` | `--max-frames` | `0`: all frames; positive integer limits each input |
+| `format` | `--format` | `txt`, `html`, or `jsonl` |
+| `outputDir` | `--output-dir` | `ascii` in the working directory |
+| `recursive` | `--recursive` / `--no-recursive` | `false` |
+| `overwrite` | `--overwrite` / `--no-overwrite` | `false` |
+
+### Batch files and pipelines
+
+Batch discovery is sorted and supports PNG, JPG/JPEG, BMP, GIF, and MP4 extensions
+(case insensitive). It skips other extensions and does not follow symlinks.
+Each input gets its own output directory, preserving the input filename **including
+its extension** and any relative subdirectories:
+
+```text
+ascii/
+  photo.png/frame-000001.txt
+  photo.jpg/frame-000001.txt
+  clips/movie.mp4/frame-000001.txt
+  clips/movie.mp4/frame-000002.txt
+```
+
+Existing files cause that input to fail unless `--overwrite` is set. Other inputs
+continue. Frames already written remain after a failure; rerun with `--overwrite`
+to replace them. Overwrite does not remove older extra frames from previous runs.
+MP4 frames are processed one at a time; GIF input still uses the existing in-memory
+compositor. Large movies may take substantial time with the current per-frame decoder.
+
+`--stdout` writes **no output files**. TXT mode emits only ASCII, with a form-feed
+character (`\f`, U+000C) between frames and no headers. JSONL emits one JSON object
+per frame with `source`, one-based `frame`, `timeMillis`, `delayMillis`, `columns`,
+`rows`, and `text`. With color enabled, `rgb` is a row-major array of packed
+`0xRRGGBB` integers. Newlines inside `text` are JSON-escaped. GIF timestamps use
+original delays; MP4 timestamps use the selected sampling rate. HTML exports to
+files only. Java emits UTF-8; older PowerShell versions may re-encode redirected
+text, so choose the receiving tool's encoding explicitly when needed.
+
+Progress/errors go to stderr. Exit codes are **0** for success, **1** for conversion
+or output failures (including an empty batch), and **2** for invalid arguments/config.
+Use PowerShell's `$LASTEXITCODE` to check the result. The CLI does not export encoded
+video or audio; movie output is a sequence of ASCII frame files or streamed records.
+
+The original image/GIF launcher remains available:
+
 ```powershell
 java src/ImageInspect.java Images/img.png 160
 ```
@@ -149,3 +247,12 @@ java -cp out/ascii-checks VideoSourceTest
 
 The MP4 test requires FFmpeg and generates its own short video fixture. It checks
 decoding, seeking, up/downscaling, final-frame access, and dashboard playback.
+
+Batch/config/pipeline checks (also require FFmpeg for the generated MP4 fixture):
+
+```powershell
+javac -d out/batch-checks src/ImageInspect.java src/VideoSource.java src/ConversionConfig.java src/AsciiCli.java tests/GifFramesTest.java tests/AsciiCliTest.java
+java -cp out/batch-checks AsciiCliTest
+```
+
+Contributor guidance for future work is in [`AGENTS.md`](AGENTS.md).
