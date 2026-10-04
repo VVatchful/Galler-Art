@@ -55,6 +55,34 @@ the preview immediately without another conversion.
 it in a browser to view the colored ASCII. **Export TXT** still saves plain text;
 TXT files cannot store character colors. Existing exports with the same name are replaced.
 
+The dashboard's **Export format** selector also offers ANSI, BBCode, Markdown, and
+SVG. Select a format, then use the button below it (for example, **Export SVG**).
+**Use original RGB colors** controls color in each format. The separate **Export TXT**
+button remains available for plain text. GIFs and videos export the selected frame.
+
+| Format | CLI/config value | Extension | Output |
+| --- | --- | --- | --- |
+| Plain text | `txt` | `.txt` | ASCII characters and whitespace |
+| HTML | `html` | `.html` | Standalone browser document with RGB spans |
+| ANSI | `ansi` (alias `ans`) | `.ans` | Terminal SGR sequences with 24-bit RGB foregrounds, black background, and a reset after every row |
+| BBCode | `bbcode` | `.bbcode` | `[pre][font=monospace]` wrapping and optional `[color=#RRGGBB]` tags |
+| Markdown | `markdown` (alias `md`) | `.md` | Fenced plain text without color; inline-styled HTML `<pre>`/`<span>` with color |
+| SVG | `svg` | `.svg` | Standalone vector text on black, with a scalable viewBox and explicit glyph coordinates |
+| JSON Lines (CLI only) | `jsonl` | `.jsonl` | Frame metadata, ASCII text, and optional packed RGB values |
+
+ANSI needs a terminal that interprets
+[RGB escape sequences](https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences).
+Colored Markdown uses [raw HTML blocks](https://spec.commonmark.org/0.31.2/#html-blocks);
+the receiving renderer must permit inline styles. Renderers that sanitize HTML/CSS
+may remove color. BBCode dialects differ: the destination must support `pre`,
+`font`, and nested `color` tags; some forums disable formatting inside preformatted
+blocks. BBCode cannot reliably specify a black background across forums.
+
+SVG retains editable text rather than embedding a bitmap. Its grid uses 8 by 16
+units per character; whitespace padding is preserved in the canvas. It scales
+without changing the grid, although the exact glyph shape depends on the viewer's
+monospace font. Export sizes grow with the number of nonblank characters.
+
 PNG, JPEG, BMP, and all frames of GIF images are supported. GIF frames are composed
 at the full canvas size, respecting offsets, transparency, local palettes, and
 disposal (keep, restore background, or restore previous). Transparent areas use the
@@ -174,11 +202,11 @@ relative to the current working directory. Input is always supplied on the comma
 | `autoContrast` | `--contrast` / `--no-contrast` | `true` |
 | `clip` | `--clip` | `0.02`, fraction clipped at each end; 0 through 0.499999 |
 | `invert` | `--invert` / `--no-invert` | `false` |
-| `color` | `--color` / `--no-color` | `false`; requires HTML or JSONL |
+| `color` | `--color` / `--no-color` | `false`; supported by every format except TXT |
 | `fps` | `--fps` | `0`: source average FPS limited to 1–120; otherwise 1–120, MP4 only |
 | `scale` | `--scale` | `1.0`; 0.125–4.0 decoded pixel scale, MP4 only |
 | `maxFrames` | `--max-frames` | `0`: all frames; positive integer limits each input |
-| `format` | `--format` | `txt`, `html`, or `jsonl` |
+| `format` | `--format` | `txt` (default), `html`, `ansi`, `bbcode`, `markdown`, `svg`, or `jsonl` |
 | `outputDir` | `--output-dir` | `ascii` in the working directory |
 | `recursive` | `--recursive` / `--no-recursive` | `false` |
 | `overwrite` | `--overwrite` / `--no-overwrite` | `false` |
@@ -205,18 +233,35 @@ MP4 frames are processed one at a time; GIF input still uses the existing in-mem
 compositor. Large movies may take substantial time with the current per-frame decoder.
 
 `--stdout` writes **no output files**. TXT mode emits only ASCII, with a form-feed
-character (`\f`, U+000C) between frames and no headers. JSONL emits one JSON object
+character (`\f`, U+000C) between frames and no headers. ANSI, BBCode, and Markdown
+use the same separator between independently formatted frames. JSONL emits one JSON object
 per frame with `source`, one-based `frame`, `timeMillis`, `delayMillis`, `columns`,
 `rows`, and `text`. With color enabled, `rgb` is a row-major array of packed
 `0xRRGGBB` integers. Newlines inside `text` are JSON-escaped. GIF timestamps use
-original delays; MP4 timestamps use the selected sampling rate. HTML exports to
-files only. Java emits UTF-8; older PowerShell versions may re-encode redirected
+original delays; MP4 timestamps use the selected sampling rate. HTML and SVG stdout
+require a single still image, or a single GIF/MP4 input with `--max-frames 1`;
+batch stdout for these document formats is rejected to avoid concatenating invalid
+documents. All formats support batch output to separate files. Java emits UTF-8;
+older PowerShell versions may re-encode redirected
 text, so choose the receiving tool's encoding explicitly when needed.
 
 Progress/errors go to stderr. Exit codes are **0** for success, **1** for conversion
 or output failures (including an empty batch), and **2** for invalid arguments/config.
 Use PowerShell's `$LASTEXITCODE` to check the result. The CLI does not export encoded
 video or audio; movie output is a sequence of ASCII frame files or streamed records.
+
+```powershell
+# Display RGB ASCII in a compatible terminal.
+.\run-cli.ps1 .\Images\img.png --format ansi --color --stdout
+
+# Export vector ASCII or styled Markdown in batches.
+.\run-cli.ps1 --batch .\Images --format svg --color --output-dir .\ascii\vectors
+.\run-cli.ps1 --batch .\Images --format markdown --color --output-dir .\ascii\markdown
+
+# Export BBCode, or pipe a single SVG document.
+.\run-cli.ps1 .\Images\img.png --format bbcode --color
+.\run-cli.ps1 .\Images\img.png --format svg --color --stdout > art.svg
+```
 
 The original image/GIF launcher remains available:
 
@@ -256,3 +301,10 @@ java -cp out/batch-checks AsciiCliTest
 ```
 
 Contributor guidance for future work is in [`AGENTS.md`](AGENTS.md).
+
+Export format checks:
+
+```powershell
+javac -d out/format-checks src/*.java tests/*.java
+java -cp out/format-checks ExportFormatsTest
+```

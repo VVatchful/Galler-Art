@@ -6,7 +6,7 @@ into ASCII art. Preserve the working grayscale/contrast mapping, optional averag
 RGB colors, whole-image fitting, resolution presets, and desktop playback.
 
 ## Project structure
-- `src/ImageInspect.java`: image/GIF reading, frame composition, shared ASCII and RGB conversion.
+- `src/ImageInspect.java`: image/GIF reading, frame composition, shared ASCII/RGB conversion and `ExportFormat` serializers.
 - `src/VideoSource.java`: FFmpeg/ffprobe discovery, bounded-memory MP4 frame sampling and scaling.
 - `src/AsciiDashboard.java`: Swing UI. Keep decoding/conversion off the event-dispatch thread.
 - `src/AsciiCli.java` and `src/ConversionConfig.java`: batch CLI and reproducible settings.
@@ -31,13 +31,15 @@ RGB colors, whole-image fitting, resolution presets, and desktop playback.
 ## Validation
 Compile `src/*.java` and `tests/*.java` to an ignored build directory using `javac`.
 Run the relevant executable tests: `ImageInspectTest`, `AsciiColorTest`,
-`GifFramesTest`, `AsciiDashboardTest`, `VideoSourceTest`, and `AsciiCliTest`.
+`GifFramesTest`, `AsciiDashboardTest`, `VideoSourceTest`, `AsciiCliTest`, and `ExportFormatsTest`.
 Video tests need FFmpeg/ffprobe (`setup-ffmpeg.ps1` installs project-local binaries).
 Run `git diff --check` and report checks actually performed and any limitations.
 
 ## Current boundaries
 The dashboard supports local images, GIFs, and silent MP4 previews. Video frames are
 sampled at a selected FPS; decoding may be slower than real time. TXT has no color;
-HTML preserves color. Do not describe frame exports as encoded video exports.
+HTML, ANSI, BBCode, Markdown with inline HTML, and SVG support color. SVG retains
+text glyphs and a scalable viewBox. Markdown styles and BBCode tags depend on the
+receiving renderer. ANSI must reset terminal styling. Do not describe frame exports as encoded video exports.
 The CLI's documented configuration schema and examples are the source of truth for
 supported JSON/YAML settings. Update this guidance when architecture changes.

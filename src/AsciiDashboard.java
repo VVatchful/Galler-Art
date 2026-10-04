@@ -21,6 +21,7 @@ public class AsciiDashboard extends JFrame {
     private final JButton convert = new JButton("Generate preview");
     private final JButton export = new JButton("Export TXT");
     private final JButton exportHtml = new JButton("Export HTML");
+    private final JComboBox<ImageInspect.ExportFormat> exportFormat = new JComboBox<>(ImageInspect.ExportFormat.values());
     private final JCheckBox color = new JCheckBox("Use original RGB colors", false);
     private final JSpinner columns = new JSpinner(new SpinnerNumberModel(160, 10, 1000, 10));
     private final JComboBox<ImageInspect.OutputFormat> format =
@@ -106,6 +107,8 @@ public class AsciiDashboard extends JFrame {
         addControl(settings, row("Preview font size", fontSize));
         addControl(settings, convert);
         addControl(settings, export);
+        exportFormat.setSelectedItem(ImageInspect.ExportFormat.HTML);
+        addControl(settings, row("Export format", exportFormat));
         addControl(settings, exportHtml);
         settings.add(Box.createVerticalGlue());
         JScrollPane settingsScroll = new JScrollPane(settings);
@@ -140,6 +143,7 @@ public class AsciiDashboard extends JFrame {
         convert.addActionListener(event -> generate());
         export.addActionListener(event -> exportText());
         exportHtml.addActionListener(event -> exportHtml());
+        exportFormat.addActionListener(event -> exportHtml.setText("Export " + exportFormat.getSelectedItem()));
         color.addActionListener(event -> refreshColor());
         columns.addChangeListener(event -> invalidatePreview());
         format.addActionListener(event -> {
@@ -584,14 +588,14 @@ public class AsciiDashboard extends JFrame {
     }
 
     private void exportText() {
-        exportFile(false);
+        exportFile(ImageInspect.ExportFormat.TXT);
     }
 
     private void exportHtml() {
-        exportFile(true);
+        exportFile((ImageInspect.ExportFormat) exportFormat.getSelectedItem());
     }
 
-    private void exportFile(boolean html) {
+    private void exportFile(ImageInspect.ExportFormat selectedFormat) {
         if (generated == null || busy) return;
         pausePlayback();
         try {
@@ -600,8 +604,8 @@ public class AsciiDashboard extends JFrame {
             String name = sourceFile.getName();
             int dot = name.lastIndexOf('.');
             String suffix = totalFrames() > 1 ? String.format("-frame-%04d", (Integer) frame.getValue()) : "";
-            Path output = folder.resolve((dot > 0 ? name.substring(0, dot) : name) + suffix + (html ? ".html" : ".txt"));
-            Files.writeString(output, html ? generatedResult.toHtml(color.isSelected()) : generated, StandardCharsets.UTF_8);
+            Path output = folder.resolve((dot > 0 ? name.substring(0, dot) : name) + suffix + "." + selectedFormat.extension);
+            Files.writeString(output, generatedResult.export(selectedFormat, color.isSelected()), StandardCharsets.UTF_8);
             status.setText("Saved " + output.toAbsolutePath());
         } catch (Exception exception) {
             showError(exception);
