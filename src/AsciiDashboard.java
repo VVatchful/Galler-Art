@@ -55,6 +55,13 @@ public class AsciiDashboard extends JFrame {
     private String generated;
     private ImageInspect.AsciiResult generatedResult;
     private boolean busy;
+    private FrameProcessing.VideoWindow videoWindow;
+    private final JLabel timingInfo = new JLabel();
+    private final JLabel memoryInfo = new JLabel();
+    private final Timer metricsTimer = new Timer(1000, event -> updateMetrics());
+    private long decodeNanos, conversionNanos, renderNanos, peakHeap;
+    private String timingScope = "load/batch";
+    private SwingWorker<?, ?> activeConversion;
 
     public AsciiDashboard() {
         super("Galler-Art | ASCII Studio");
@@ -128,7 +135,17 @@ public class AsciiDashboard extends JFrame {
         previewViews.add(scroll, "text");
         previewViews.setBorder(BorderFactory.createTitledBorder("ASCII preview"));
         root.add(previewViews, BorderLayout.CENTER);
-        root.add(status, BorderLayout.SOUTH);
+        JPanel statusBar = new JPanel(new GridLayout(0, 1, 0, 3));
+        statusBar.add(status);
+        statusBar.add(timingInfo);
+        statusBar.add(memoryInfo);
+        root.add(statusBar, BorderLayout.SOUTH);
+        timingInfo.setToolTipText("Decode: image/GIF load or video frame. Convert: GIF batch wall time or video frame. Render: latest ASCII paint, excluding screen presentation.");
+        memoryInfo.setToolTipText("Live JVM heap only (not FFmpeg/native memory). Peak is sampled once per second; GC totals are since JVM start.");
+        fittedPreview.paintTiming = nanos -> renderNanos = nanos;
+        zoomPreview.paintTiming = nanos -> renderNanos = nanos;
+        updateMetrics();
+        metricsTimer.start();
 
         choose.addActionListener(event -> chooseImage());
         playbackTimer.setRepeats(false);
@@ -199,6 +216,9 @@ public class AsciiDashboard extends JFrame {
 
     private void invalidatePreview() {
         pausePlayback();
+        closeVideoWindow();
+        conversionNanos = 0;
+        renderNanos = 0;
         updateOutputDimensions();
         generatedFrames = List.of();
         updatePlaybackControls();
@@ -213,6 +233,28 @@ public class AsciiDashboard extends JFrame {
         if (source != null) {
             status.setText("Options changed. Generate a new preview to export these settings.");
         }
+    }
+
+    private void closeVideoWindow() {
+        if (videoWindow != null) videoWindow.close();
+        videoWindow = null;
+    }
+
+    private void updateMetrics() {
+        timingInfo.setText(String.format(java.util.Locale.ROOT,
+                "Decode %.2f ms | Convert %.2f ms (%s) | Render %.2f ms",
+                decodeNanos / 1e6, conversionNanos / 1e6, timingScope, renderNanos / 1e6));
+        java.lang.management.MemoryUsage heap = java.lang.management.ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
+        peakHeap = Math.max(peakHeap, heap.getUsed());
+        long gcCount = 0, gcMillis = 0;
+        for (java.lang.management.GarbageCollectorMXBean gc : java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) {
+            gcCount += Math.max(0, gc.getCollectionCount());
+            gcMillis += Math.max(0, gc.getCollectionTime());
+        }
+        memoryInfo.setText(String.format(java.util.Locale.ROOT,
+                "Heap %.1f / %.1f MiB committed | Max %.1f MiB | Peak %.1f MiB | GC %d / %d ms | Video buffer %d",
+                heap.getUsed() / 1048576.0, heap.getCommitted() / 1048576.0, heap.getMax() / 1048576.0,
+                peakHeap / 1048576.0, gcCount, gcMillis, videoWindow == null ? 0 : videoWindow.bufferedFrames()));
     }
 
     private void updateOutputDimensions() {
@@ -326,6 +368,9 @@ public class AsciiDashboard extends JFrame {
     @Override
     public void dispose() {
         disposed = true;
+        metricsTimer.stop();
+        if (activeConversion != null) activeConversion.cancel(true);
+        closeVideoWindow();
         pausePlayback();
         if (video != null) video.close();
         super.dispose();
@@ -342,6 +387,7 @@ public class AsciiDashboard extends JFrame {
 
     void loadImage(File selected) {
         if (busy) return;
+        closeVideoWindow();
         if (selected.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".mp4")) {
             loadVideo(selected);
             return;
@@ -349,14 +395,20 @@ public class AsciiDashboard extends JFrame {
         setBusy(true);
         status.setText("Loading " + selected.getName() + "...");
         new SwingWorker<List<ImageInspect.ImageFrame>, Void>() {
+            private long elapsed;
             protected List<ImageInspect.ImageFrame> doInBackground() throws Exception {
-                return ImageInspect.readFrames(selected);
+                long start = System.nanoTime();
+                try { return ImageInspect.readFrames(selected); }
+                finally { elapsed = System.nanoTime() - start; }
             }
 
             protected void done() {
                 boolean loaded = false;
                 try {
                     List<ImageInspect.ImageFrame> loadedFrames = get();
+                    if (disposed) return;
+                    decodeNanos = elapsed;
+                    timingScope = "load/batch";
                     if (video != null) video.close();
                     video = null;
                     generatedFrames = List.of();
@@ -407,22 +459,28 @@ public class AsciiDashboard extends JFrame {
         ImageInspect.OutputFormat selectedFormat = (ImageInspect.OutputFormat) format.getSelectedItem();
         setBusy(true);
         status.setText("Generating ASCII...");
-        new SwingWorker<List<ImageInspect.AsciiResult>, Void>() {
-            protected List<ImageInspect.AsciiResult> doInBackground() {
-                List<ImageInspect.AsciiResult> results = new ArrayList<>();
-                if (sourceFrames.isEmpty()) {
-                    results.add(ImageInspect.convert(source, width, enhance, clip, reverse, selectedFormat));
-                } else {
-                    for (ImageInspect.ImageFrame sourceFrame : sourceFrames) {
-                        results.add(ImageInspect.convert(sourceFrame.image, width, enhance, clip, reverse, selectedFormat));
-                    }
-                }
-                return List.copyOf(results);
+        FrameProcessing.Settings settings = new FrameProcessing.Settings(width, enhance, clip, reverse, selectedFormat);
+        List<ImageInspect.ImageFrame> frames = sourceFrames;
+        BufferedImage still = source;
+        activeConversion = new SwingWorker<List<ImageInspect.AsciiResult>, Void>() {
+            private long elapsed;
+            protected List<ImageInspect.AsciiResult> doInBackground() throws Exception {
+                long start = System.nanoTime();
+                try {
+                    int count = frames.isEmpty() ? 1 : frames.size();
+                    int workers = FrameProcessing.workerCount(settings.estimate(still.getWidth(), still.getHeight()));
+                    return FrameProcessing.ordered(count, workers,
+                            index -> settings.convert(frames.isEmpty() ? still : frames.get(index).image));
+                } finally { elapsed = System.nanoTime() - start; }
             }
 
             protected void done() {
                 try {
+                    if (disposed) return;
                     generatedFrames = get();
+                    conversionNanos = elapsed;
+                    renderNanos = 0;
+                    updateMetrics();
                     showFrame();
                 } catch (Exception exception) {
                     generatedFrames = List.of();
@@ -432,7 +490,8 @@ public class AsciiDashboard extends JFrame {
                     setBusy(false);
                 }
             }
-        }.execute();
+        };
+        activeConversion.execute();
     }
 
     private void loadVideo(File selected) {
@@ -505,23 +564,37 @@ public class AsciiDashboard extends JFrame {
         double clip = ((Number) clipping.getValue()).doubleValue() / 100;
         boolean reverse = invert.isSelected();
         ImageInspect.OutputFormat selectedFormat = (ImageInspect.OutputFormat) format.getSelectedItem();
+        if (videoWindow == null) {
+            try {
+                videoWindow = new FrameProcessing.VideoWindow(currentVideo, fps, scale,
+                        new FrameProcessing.Settings(width, enhance, clip, reverse, selectedFormat));
+            } catch (IllegalArgumentException exception) { showError(exception); return; }
+        }
+        FrameProcessing.VideoWindow window = videoWindow;
         boolean resume = playing && advancingFrame;
         long started = System.nanoTime();
         setBusy(true);
         pendingVideoPlayback = resume;
         updatePlaybackControls();
         status.setText("Decoding and converting video frame " + (index + 1) + "...");
-        new SwingWorker<ImageInspect.AsciiResult, Void>() {
+        activeConversion = new SwingWorker<ImageInspect.AsciiResult, Void>() {
             private BufferedImage decoded;
+            private FrameProcessing.Frame processed;
             protected ImageInspect.AsciiResult doInBackground() throws Exception {
-                decoded = currentVideo.readFrame(index, fps, scale);
-                return ImageInspect.convert(decoded, width, enhance, clip, reverse, selectedFormat);
+                processed = window.get(index);
+                decoded = processed.image;
+                return processed.ascii;
             }
             protected void done() {
                 boolean success = false;
                 try {
                     ImageInspect.AsciiResult result = get();
-                    if (disposed || currentVideo != video) return;
+                    if (disposed || currentVideo != video || window != videoWindow) return;
+                    decodeNanos = processed.decodeNanos;
+                    conversionNanos = processed.conversionNanos;
+                    renderNanos = 0;
+                    timingScope = "video frame";
+                    updateMetrics();
                     source = decoded;
                     original.image = decoded;
                     original.repaint();
@@ -553,7 +626,8 @@ public class AsciiDashboard extends JFrame {
                     playbackTimer.restart();
                 }
             }
-        }.execute();
+        };
+        activeConversion.execute();
     }
 
     private void showFrame() {
@@ -623,6 +697,7 @@ public class AsciiDashboard extends JFrame {
         private int columns;
         private ImageInspect.AsciiResult colors;
         boolean fit = true;
+        java.util.function.LongConsumer paintTiming = nanos -> { };
 
         FittedPreview() {
             setBackground(Color.BLACK);
@@ -666,6 +741,7 @@ public class AsciiDashboard extends JFrame {
 
         @Override
         protected void paintComponent(Graphics graphics) {
+            long started = System.nanoTime();
             super.paintComponent(graphics);
             Rectangle bounds = fittedBounds();
             if (bounds.width <= 0 || bounds.height <= 0) return;
@@ -694,6 +770,7 @@ public class AsciiDashboard extends JFrame {
                 }
             } finally {
                 copy.dispose();
+                paintTiming.accept(System.nanoTime() - started);
             }
         }
     }

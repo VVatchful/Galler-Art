@@ -68,19 +68,29 @@ public final class AsciiCli {
                 double fps = o.fps == 0 ? Math.max(1, Math.min(120, video.sourceFps)) : o.fps;
                 int count = video.frameCount(fps);
                 if (o.maxFrames > 0) count = Math.min(count, o.maxFrames);
-                for (int i = 0; i < count; i++) {
-                    sink.write(name, i + 1, Math.round(i * 1000 / fps), Math.round(1000 / fps),
-                            render(video.readFrame(i, fps, o.scale), o));
+                try (FrameProcessing.VideoWindow window = new FrameProcessing.VideoWindow(video, fps, o.scale,
+                        new FrameProcessing.Settings(o.columns, o.autoContrast, o.clip, o.invert, o.preset), count)) {
+                    for (int i = 0; i < count; i++) {
+                        sink.write(name, i + 1, Math.round(i * 1000 / fps), Math.round(1000 / fps), window.get(i).ascii);
+                    }
                 }
             }
         } else {
             List<ImageInspect.ImageFrame> frames = ImageInspect.readFrames(path.toFile());
             int count = o.maxFrames > 0 ? Math.min(frames.size(), o.maxFrames) : frames.size();
             long time = 0;
-            for (int i = 0; i < count; i++) {
-                ImageInspect.ImageFrame frame = frames.get(i);
-                sink.write(name, i + 1, time, frame.delayMillis, render(frame.image, o));
-                time += frame.delayMillis;
+            BufferedImage first = frames.get(0).image;
+            FrameProcessing.Settings settings = new FrameProcessing.Settings(o.columns, o.autoContrast, o.clip, o.invert, o.preset);
+            int workers = FrameProcessing.workerCount(settings.estimate(first.getWidth(), first.getHeight()));
+            for (int start = 0; start < count; start += workers) {
+                final int offset = start;
+                List<ImageInspect.AsciiResult> results = FrameProcessing.ordered(Math.min(workers, count - start), workers,
+                        index -> render(frames.get(offset + index).image, o));
+                for (int j = 0; j < results.size(); j++) {
+                    ImageInspect.ImageFrame frame = frames.get(start + j);
+                    sink.write(name, start + j + 1, time, frame.delayMillis, results.get(j));
+                    time += frame.delayMillis;
+                }
             }
         }
     }

@@ -8,6 +8,7 @@ RGB colors, whole-image fitting, resolution presets, and desktop playback.
 ## Project structure
 - `src/ImageInspect.java`: image/GIF reading, frame composition, shared ASCII/RGB conversion and `ExportFormat` serializers.
 - `src/VideoSource.java`: FFmpeg/ffprobe discovery, bounded-memory MP4 frame sampling and scaling.
+- `src/FrameProcessing.java`: bounded parallel frame conversion, ordered results, isolated video decoders and look-ahead caching.
 - `src/AsciiDashboard.java`: Swing UI. Keep decoding/conversion off the event-dispatch thread.
 - `src/AsciiCli.java` and `src/ConversionConfig.java`: batch CLI and reproducible settings.
 - `tests/`: executable Java test classes; no test framework required.
@@ -19,6 +20,8 @@ RGB colors, whole-image fitting, resolution presets, and desktop playback.
 - Fit the complete source with padding; do not silently crop or distort it.
 - Distinguish decoded pixel dimensions from ASCII columns/rows. Text cells use a 1:2 width/height ratio.
 - Process movie frames incrementally; do not retain whole movies in memory.
+- Keep GIF composition sequential; parallelize only composed frame conversion. Cap workers and video buffers, preserve order, and cancel stale work on settings/media changes.
+- Profile actual preview painting; distinguish per-frame timings from batch wall time and JVM heap from native/FFmpeg memory.
 - Invoke external programs with argument arrays, never shell-built command strings.
 - Close decoders and temporary resources on success and failure.
 - Keep CLI stdout for payloads and stderr for diagnostics. Return nonzero exit codes on failure.
@@ -31,7 +34,7 @@ RGB colors, whole-image fitting, resolution presets, and desktop playback.
 ## Validation
 Compile `src/*.java` and `tests/*.java` to an ignored build directory using `javac`.
 Run the relevant executable tests: `ImageInspectTest`, `AsciiColorTest`,
-`GifFramesTest`, `AsciiDashboardTest`, `VideoSourceTest`, `AsciiCliTest`, and `ExportFormatsTest`.
+`GifFramesTest`, `AsciiDashboardTest`, `VideoSourceTest`, `AsciiCliTest`, `ExportFormatsTest`, and `FrameProcessingTest`.
 Video tests need FFmpeg/ffprobe (`setup-ffmpeg.ps1` installs project-local binaries).
 Run `git diff --check` and report checks actually performed and any limitations.
 
