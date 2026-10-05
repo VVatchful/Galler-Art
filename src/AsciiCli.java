@@ -166,9 +166,14 @@ public final class AsciiCli {
         if (o.fps > 0 && o.fps < 1) throw new IllegalArgumentException("fps must be 0 (source rate) or 1 to 120");
         o.maxFrames = integer(settings, "maxFrames", 0, 0, Integer.MAX_VALUE);
         o.format = settings.getOrDefault("format", "txt").toLowerCase(Locale.ROOT);
-        if (!Set.of("txt", "html", "jsonl").contains(o.format)) throw new IllegalArgumentException("format must be txt, html, or jsonl");
-        if (o.color && o.format.equals("txt")) throw new IllegalArgumentException("Color requires --format html or jsonl; TXT is plain text");
-        if (o.stdout && o.format.equals("html")) throw new IllegalArgumentException("--stdout supports txt or jsonl; HTML exports to files");
+        if (o.format.equals("md")) o.format = "markdown";
+        if (o.format.equals("ans")) o.format = "ansi";
+        if (!Set.of("txt", "html", "jsonl", "ansi", "bbcode", "markdown", "svg").contains(o.format))
+            throw new IllegalArgumentException("format must be txt, html, jsonl, ansi, bbcode, markdown, or svg");
+        if (o.color && o.format.equals("txt")) throw new IllegalArgumentException("TXT is plain text; select another format for color");
+        if (o.stdout && Set.of("html", "svg").contains(o.format)
+                && (o.batch || (Set.of("gif", "mp4").contains(extension(input)) && o.maxFrames != 1)))
+            throw new IllegalArgumentException("HTML/SVG stdout requires one input image, or --max-frames 1 for GIF/MP4");
         o.output = Path.of(settings.getOrDefault("outputDir", "ascii")).toAbsolutePath().normalize();
         return o;
     }
@@ -204,10 +209,12 @@ public final class AsciiCli {
         boolean emitted;
         Sink(Options options, PrintStream out) { this.options = options; this.out = out; }
         void write(String source, int frame, long time, long delay, ImageInspect.AsciiResult result) throws Exception {
-            String payload = options.format.equals("html") ? result.toHtml(options.color)
-                    : options.format.equals("jsonl") ? jsonFrame(source, frame, time, delay, result, options.color) : result.text;
+            ImageInspect.ExportFormat exportFormat = options.format.equals("jsonl") ? null
+                    : ImageInspect.ExportFormat.valueOf(options.format.toUpperCase(Locale.ROOT));
+            String payload = exportFormat == null ? jsonFrame(source, frame, time, delay, result, options.color)
+                    : result.export(exportFormat, options.color);
             if (options.stdout) {
-                if (emitted && options.format.equals("txt")) out.print('\f');
+                if (emitted && !options.format.equals("jsonl")) out.print('\f');
                 out.print(payload); out.flush();
                 if (out.checkError()) throw new java.io.IOException("Stdout pipe closed");
                 emitted = true;
@@ -215,7 +222,8 @@ public final class AsciiCli {
                 Path directory = options.output.resolve(source).normalize();
                 if (!directory.startsWith(options.output)) throw new IllegalArgumentException("Output path escapes output directory");
                 Files.createDirectories(directory);
-                Path target = directory.resolve(String.format(Locale.ROOT, "frame-%06d.%s", frame, options.format));
+                Path target = directory.resolve(String.format(Locale.ROOT, "frame-%06d.%s", frame,
+                        exportFormat == null ? "jsonl" : exportFormat.extension));
                 if (options.overwrite) Files.writeString(target, payload, StandardCharsets.UTF_8);
                 else Files.writeString(target, payload, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
             }
@@ -257,9 +265,9 @@ public final class AsciiCli {
                 + "  --fps <0|1..120>          MP4 sampling rate; 0 uses source average FPS\n"
                 + "  --scale <0.125..4>        MP4 pixel scaling factor\n"
                 + "  --max-frames <count>      Per-input limit; 0 converts all frames\n"
-                + "  --format <txt|html|jsonl> --output-dir <directory> (default: ascii)\n"
+                + "  --format <txt|html|jsonl|ansi|bbcode|markdown|svg> --output-dir <directory> (default: ascii)\n"
                 + "  --[no-]recursive --[no-]overwrite\n"
-                + "  --stdout                 No files; TXT frames separated by form feed, or JSON Lines\n"
+                + "  --stdout                 No files; frames separated by form feed, or JSON Lines; HTML/SVG single frame only\n"
                 + "Exit codes: 0 success, 1 conversion failure, 2 invalid settings. Diagnostics use stderr.\n";
     }
 }

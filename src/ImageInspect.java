@@ -168,6 +168,12 @@ public class ImageInspect {
     private static final String CHARACTERS = " .:-=+*#%@";
     private static final double CONTRAST_CLIP = 0.02;
 
+    public enum ExportFormat {
+        TXT("txt"), HTML("html"), ANSI("ans"), BBCODE("bbcode"), MARKDOWN("md"), SVG("svg");
+        public final String extension;
+        ExportFormat(String extension) { this.extension = extension; }
+    }
+
     public static final class AsciiResult {
         public final String text;
         public final int width;
@@ -182,6 +188,98 @@ public class ImageInspect {
         }
 
         public int rgbAt(int x, int y) { return colors[y * width + x]; }
+
+        public String export(ExportFormat format, boolean color) {
+            switch (format) {
+                case TXT: return text;
+                case HTML: return toHtml(color);
+                case ANSI: return toAnsi(color);
+                case BBCODE: return toBbcode(color);
+                case MARKDOWN: return toMarkdown(color);
+                case SVG: return toSvg(color);
+                default: throw new IllegalArgumentException("Unsupported export format: " + format);
+            }
+        }
+
+        private static String hex(int rgb) {
+            return String.format(java.util.Locale.ROOT, "%06x", rgb);
+        }
+
+        private static String escaped(char c) {
+            switch (c) {
+                case '&': return "&amp;";
+                case '<': return "&lt;";
+                case '>': return "&gt;";
+                case '"': return "&quot;";
+                case '\'': return "&#39;";
+                default: return String.valueOf(c);
+            }
+        }
+
+        public String toAnsi(boolean color) {
+            StringBuilder ansi = new StringBuilder();
+            for (int y = 0; y < height; y++) {
+                // Establish black background and a readable foreground independently of terminal theme.
+                ansi.append("\u001b[0;40;97m");
+                int previous = -1;
+                for (int x = 0; x < width; x++) {
+                    char c = text.charAt(y * (width + 1) + x);
+                    int rgb = rgbAt(x, y);
+                    if (color && c != ' ' && rgb != previous) {
+                        ansi.append("\u001b[38;2;").append((rgb >>> 16) & 255).append(';')
+                                .append((rgb >>> 8) & 255).append(';').append(rgb & 255).append('m');
+                        previous = rgb;
+                    }
+                    ansi.append(c);
+                }
+                ansi.append("\u001b[0m\n");
+            }
+            return ansi.toString();
+        }
+
+        public String toBbcode(boolean color) {
+            StringBuilder bb = new StringBuilder("[pre][font=monospace]");
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    char c = text.charAt(y * (width + 1) + x);
+                    if (color && c != ' ') bb.append("[color=#").append(hex(rgbAt(x, y))).append(']');
+                    bb.append(c); // The fixed ASCII ramp contains no BBCode delimiters.
+                    if (color && c != ' ') bb.append("[/color]");
+                }
+                bb.append('\n');
+            }
+            return bb.append("[/font][/pre]\n").toString();
+        }
+
+        public String toMarkdown(boolean color) {
+            if (!color) return "```text\n" + text + "```\n";
+            String html = toHtml(true);
+            int start = html.indexOf('>', html.indexOf("<pre ")) + 1;
+            return "<pre style=\"background:#000;color:#e8edf4;font-family:monospace;font-size:16px;"
+                    + "line-height:2ch;white-space:pre;overflow:auto\">"
+                    + html.substring(start, html.indexOf("</pre>")) + "</pre>\n";
+        }
+
+        public String toSvg(boolean color) {
+            long pixelWidth = (long) width * 8;
+            long pixelHeight = (long) height * 16;
+            StringBuilder svg = new StringBuilder("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ")
+                    .append(pixelWidth).append(' ').append(pixelHeight).append("\" width=\"")
+                    .append(pixelWidth).append("\" height=\"").append(pixelHeight)
+                    .append("\" role=\"img\" aria-label=\"ASCII art\">\n<title>Galler-Art ASCII</title>\n")
+                    .append("<rect width=\"100%\" height=\"100%\" fill=\"#000\"/>\n")
+                    .append("<g font-family=\"monospace\" font-size=\"13\" font-variant-ligatures=\"none\" xml:space=\"preserve\">\n");
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    char c = text.charAt(y * (width + 1) + x);
+                    if (c == ' ') continue; // Explicit coordinates preserve empty cells and padding.
+                    svg.append("<text x=\"").append((long) x * 8).append("\" y=\"").append((long) y * 16 + 13)
+                            .append("\" fill=\"#").append(color ? hex(rgbAt(x, y)) : "e8edf4")
+                            .append("\">").append(escaped(c)).append("</text>\n");
+                }
+            }
+            return svg.append("</g>\n</svg>\n").toString();
+        }
 
         public String toHtml(boolean color) {
             StringBuilder html = new StringBuilder("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">"
