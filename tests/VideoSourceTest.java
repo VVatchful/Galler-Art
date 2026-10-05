@@ -29,6 +29,21 @@ public class VideoSourceTest {
                 BufferedImage up = source.readFrame(11, 6, 2);
                 check(up.getWidth() == 320 && up.getHeight() == 180, "Upscale and last frame");
                 check(!ImageInspect.toAscii(up, 80).isBlank(), "Video frame converts to ASCII");
+                FrameProcessing.VideoWindow window = new FrameProcessing.VideoWindow(source, 6, 1,
+                        new FrameProcessing.Settings(80, true, 0.02, false, ImageInspect.OutputFormat.ORIGINAL));
+                try {
+                    for (int index : new int[] {0, 1, 8, 2, 11}) {
+                        FrameProcessing.Frame processed = window.get(index);
+                        check(processed.ascii.text.equals(ImageInspect.toAscii(source.readFrame(index, 6, 1), 80)),
+                                "Prefetch and seeks preserve selected frame");
+                        check(window.bufferedFrames() <= window.capacity && window.capacity <= 4, "Bounded video buffer");
+                        check(processed.decodeNanos > 0 && processed.conversionNanos > 0, "Video timing metrics recorded");
+                    }
+                } finally { window.close(); }
+                check(window.awaitStopped(5, TimeUnit.SECONDS), "Decoder workers shut down");
+                check(window.bufferedFrames() == 0, "Close releases cached frames");
+                try { window.get(0); throw new AssertionError("Closed window accepted work"); }
+                catch (java.util.concurrent.CancellationException expected) { }
                 try {
                     source.readFrame(12, 6, 1);
                     throw new AssertionError("Out-of-range frame accepted");
@@ -46,6 +61,9 @@ public class VideoSourceTest {
             awaitPreview();
             SwingUtilities.invokeAndWait(() -> {
                 check(((JButton) field("play")).isEnabled(), "MP4 playback enabled");
+                check(((JLabel) field("timingInfo")).getText().contains("video frame"), "Status bar timing scope");
+                check(((JLabel) field("memoryInfo")).getText().contains("Heap") && (Long) field("peakHeap") > 0,
+                        "Live heap profiling displayed");
                 ((JComboBox<?>) field("videoScale")).setSelectedItem("50%");
             });
             awaitPreview();
@@ -78,7 +96,12 @@ public class VideoSourceTest {
                     "Pause stops playback after in-flight frame"));
             System.out.println("MP4 checks passed: decode, seek, scale, last frame, cleanup, dashboard, playback and pause.");
         } finally {
-            SwingUtilities.invokeAndWait(() -> { if (dashboard != null) dashboard.dispose(); });
+            SwingUtilities.invokeAndWait(() -> {
+                if (dashboard != null) {
+                    dashboard.dispose();
+                    check(!((Timer) field("metricsTimer")).isRunning(), "Memory sampler stops on close");
+                }
+            });
             Files.deleteIfExists(movie);
             Files.deleteIfExists(directory);
         }

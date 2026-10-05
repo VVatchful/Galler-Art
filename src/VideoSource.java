@@ -21,6 +21,16 @@ public final class VideoSource implements AutoCloseable {
     private volatile Process process;
     private volatile boolean closed;
 
+    private VideoSource(VideoSource original) throws IOException {
+        if (original.closed) throw new IOException("Video source is closed.");
+        file = original.file; width = original.width; height = original.height;
+        duration = original.duration; sourceFps = original.sourceFps;
+        scratch = Files.createTempDirectory("galler-art-video-");
+    }
+
+    /** Shares immutable metadata only; decoder process and scratch files are independent. */
+    public VideoSource fork() throws IOException { return new VideoSource(this); }
+
     public static String executable(String name) {
         String override = System.getenv(name.toUpperCase(Locale.ROOT) + "_PATH");
         if (override != null && !override.isBlank()) return override;
@@ -92,7 +102,8 @@ public final class VideoSource implements AutoCloseable {
         Path frame = scratch.resolve("frame.png");
         List<String> command = new ArrayList<>(List.of(executable("ffmpeg"), "-hide_banner", "-loglevel", "error",
                 "-nostdin", "-y", "-ss", String.format(Locale.ROOT, "%.9f", index / fps),
-                "-i", file.toString(), "-map", "0:v:0", "-an", "-sn", "-frames:v", "1",
+                "-threads", "1", "-i", file.toString(), "-map", "0:v:0", "-an", "-sn", "-frames:v", "1",
+                "-filter_threads", "1",
                 "-vf", "scale=" + size[0] + ":" + size[1] + ":flags=lanczos,setsar=1",
                 "-threads", "1", "-update", "1", frame.toString()));
         Files.deleteIfExists(frame);
@@ -121,6 +132,8 @@ public final class VideoSource implements AutoCloseable {
             }
         } finally {
             active.destroyForcibly();
+            try { active.waitFor(2, TimeUnit.SECONDS); }
+            catch (InterruptedException exception) { Thread.currentThread().interrupt(); }
             process = null;
         }
     }

@@ -366,6 +366,7 @@ public class ImageInspect {
 
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
+                if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException("Conversion cancelled");
                 int startX = (int) ((long) x * image.getWidth() / width);
                 int endX = (int) ((long) (x + 1) * image.getWidth() / width);
                 int startY = (int) ((long) y * image.getHeight() / height);

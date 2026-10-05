@@ -13,7 +13,7 @@ From PowerShell in the project folder:
 Or run `AsciiDashboard.main()` in IntelliJ. You can also compile and launch manually:
 
 ```powershell
-javac -d out/dashboard src/ImageInspect.java src/VideoSource.java src/AsciiDashboard.java
+javac -d out/dashboard src/ImageInspect.java src/VideoSource.java src/FrameProcessing.java src/AsciiDashboard.java
 java -cp out/dashboard AsciiDashboard
 ```
 
@@ -88,7 +88,8 @@ at the full canvas size, respecting offsets, transparency, local palettes, and
 disposal (keep, restore background, or restore previous). Transparent areas use the
 same black background as still-image ASCII conversion.
 
-Importing a GIF generates ASCII for every frame. Use **Frame** to inspect matching
+Importing a GIF composes frames sequentially (to preserve disposal dependencies),
+then converts the independent composed frames to ASCII in parallel. Use **Frame** to inspect matching
 original and ASCII frames; the label shows the frame count and original delay in
 milliseconds. Changing conversion settings regenerates all frames when you select
 **Generate preview**. RGB colors and both preview modes work with every frame.
@@ -119,8 +120,9 @@ install both tools on PATH or set `FFMPEG_PATH` and `FFPROBE_PATH` to their exec
 paths. Downloaded tools and build output are excluded from Git.
 
 MP4 import displays source dimensions, duration, and average FPS. Each requested
-frame is decoded and converted in a background worker. Only the current decoded
-frame and ASCII result are retained, so memory usage does not grow with movie length.
+frame is decoded and converted in a background worker, with a bounded parallel
+look-ahead window. The current frame and at most four buffered frame jobs/results
+are retained, so memory usage does not grow with movie length.
 The decoder uses temporary files, cleaned up on replacement or window close.
 
 - **Video pixel scale** offers 25%, 50%, 100%, 150%, and 200%, preserving proportions.
@@ -139,11 +141,46 @@ The decoder uses temporary files, cleaned up on replacement or window close.
   Format changes regenerate the current frame. Other conversion options use
   **Generate preview** as before.
 
-Playback is a silent, best-effort preview. This first decoder seeks and launches
-FFmpeg for each requested frame, so high FPS or large resolutions can play slower
+Playback is a silent, best-effort preview. The decoder seeks and launches
+FFmpeg for each requested/prefetched frame, so high FPS or large resolutions can play slower
 than real time. Lower the FPS, pixel scale, or ASCII width when needed. Pause also
 works while a frame is decoding; that frame may finish but playback will stop.
-Decoding has a 30-second timeout per request.
+Decoding has a 30-second timeout per request. Pause stops advancement; already
+scheduled bounded look-ahead work may finish. Changing options or media cancels
+old buffered work; closing the dashboard stops workers and profiling timers.
+
+## Performance and memory metrics
+
+The dashboard footer includes live timing and memory readings:
+
+- **Decode**: wall time for the latest image/GIF load, or the selected video frame's
+  FFmpeg decoding and PNG read. Video metadata probing and queue wait are excluded.
+- **Convert**: wall time for the complete parallel GIF conversion batch (or still
+  image), or the selected video frame's ASCII conversion. The label identifies the
+  scope. Prefetched frames report their original processing time, not cache lookup time.
+- **Render**: duration of the most recent visible ASCII preview `paintComponent`
+  execution, including drawing glyphs. It excludes repaint queue delay, original-image
+  thumbnail painting, and monitor/compositor presentation. Zero means no paint has
+  been recorded for the new conversion yet. Color/zoom/window resizing also update it.
+- **Heap**: used and committed JVM heap, maximum heap, and sampled peak used heap.
+  The peak is sampled once per second for the lifetime of this dashboard; short
+  allocation spikes can be missed. **GC** reports JVM-lifetime collection count
+  and collection time. These figures exclude native allocations and FFmpeg processes.
+- **Video buffer**: number of cached or scheduled frame jobs in the look-ahead window.
+
+Both the CLI and dashboard preserve frame order while running independent work in
+parallel. Concurrency is capped at the smaller of four workers and available CPU
+processors, then reduced according to estimated per-frame memory and a budget of
+the smaller of 128 MiB and one eighth of maximum JVM heap. This estimate is a
+concurrency heuristic, not a hard process-memory limit; one very large frame can
+exceed it. Whole GIF source frames and dashboard GIF results still stay in memory.
+Parallel converter output is limited to 4 million ASCII cells per frame.
+
+Each video job owns separate decoder scratch files and a single-threaded FFmpeg
+decoder/filter, avoiding shared-file races and CPU oversubscription. Seeks evict
+out-of-window jobs. GIF composition remains sequential; its ASCII conversion is
+parallel. CLI frames are written in order in bounded groups/windows. Speedup varies
+with resolution, CPU, disk, process-startup overhead, and preview drawing cost.
 
 TXT and HTML export the selected movie frame with a numbered filename, just like
 GIFs. Whole-movie export, audio playback, and downloading video URLs are not included.
@@ -174,7 +211,7 @@ The launcher compiles the CLI to `out/cli` and preserves your working directory.
 For repeated runs, compile once and invoke Java directly:
 
 ```powershell
-javac -d out/cli src/ImageInspect.java src/VideoSource.java src/ConversionConfig.java src/AsciiCli.java
+javac -d out/cli src/ImageInspect.java src/VideoSource.java src/FrameProcessing.java src/ConversionConfig.java src/AsciiCli.java
 java -cp out/cli AsciiCli --batch Images --preset hd --stdout
 ```
 
@@ -229,7 +266,7 @@ ascii/
 Existing files cause that input to fail unless `--overwrite` is set. Other inputs
 continue. Frames already written remain after a failure; rerun with `--overwrite`
 to replace them. Overwrite does not remove older extra frames from previous runs.
-MP4 frames are processed one at a time; GIF input still uses the existing in-memory
+MP4 frames are processed with a bounded parallel window; GIF input still uses the existing in-memory
 compositor. Large movies may take substantial time with the current per-frame decoder.
 
 `--stdout` writes **no output files**. TXT mode emits only ASCII, with a form-feed
@@ -282,7 +319,7 @@ java -cp out/ascii-checks ImageInspectTest
 To include dashboard and color checks:
 
 ```powershell
-javac -d out/ascii-checks src/ImageInspect.java src/VideoSource.java src/AsciiDashboard.java tests/ImageInspectTest.java tests/AsciiDashboardTest.java tests/AsciiColorTest.java tests/GifFramesTest.java tests/VideoSourceTest.java
+javac -d out/ascii-checks src/ImageInspect.java src/VideoSource.java src/FrameProcessing.java src/AsciiDashboard.java tests/ImageInspectTest.java tests/AsciiDashboardTest.java tests/AsciiColorTest.java tests/GifFramesTest.java tests/VideoSourceTest.java
 java -cp out/ascii-checks ImageInspectTest
 java -cp out/ascii-checks AsciiDashboardTest
 java -cp out/ascii-checks AsciiColorTest
@@ -296,7 +333,7 @@ decoding, seeking, up/downscaling, final-frame access, and dashboard playback.
 Batch/config/pipeline checks (also require FFmpeg for the generated MP4 fixture):
 
 ```powershell
-javac -d out/batch-checks src/ImageInspect.java src/VideoSource.java src/ConversionConfig.java src/AsciiCli.java tests/GifFramesTest.java tests/AsciiCliTest.java
+javac -d out/batch-checks src/ImageInspect.java src/VideoSource.java src/FrameProcessing.java src/ConversionConfig.java src/AsciiCli.java tests/GifFramesTest.java tests/AsciiCliTest.java
 java -cp out/batch-checks AsciiCliTest
 ```
 
@@ -307,4 +344,12 @@ Export format checks:
 ```powershell
 javac -d out/format-checks src/*.java tests/*.java
 java -cp out/format-checks ExportFormatsTest
+```
+
+Parallel processing/paint timing checks:
+
+```powershell
+javac -d out/perf-checks src/*.java tests/*.java
+java -cp out/perf-checks FrameProcessingTest
+java -cp out/perf-checks VideoSourceTest
 ```
