@@ -9,7 +9,15 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
+/**
+ * Executable regression checks for ANSI, BBCode, Markdown, SVG, and file/stdout parity.
+ */
 public class ExportFormatsTest {
+    /**
+     * Runs executable regression checks for ANSI, BBCode, Markdown, SVG, and file/stdout parity.
+     * @param args command-line arguments; see the README for supported options
+     * @throws Exception if reading, processing, or validation fails
+     */
     public static void main(String[] args) throws Exception {
         BufferedImage image = new BufferedImage(4, 2, BufferedImage.TYPE_INT_RGB);
         int[] rgb = {0xff0000, 0x00ff00, 0x0000ff, 0};

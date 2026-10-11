@@ -10,12 +10,31 @@ import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import javax.imageio.ImageIO;
 
-/** Bounded-memory, on-demand local video decoding. No whole-movie frame cache. */
+/**
+ * Bounded-memory, on-demand local video decoding. No whole-movie frame cache.
+ * Each instance owns temporary files and a decoder process. Do not read from the
+ * same instance concurrently; use {@link #fork()} and close each owned session.
+ */
 public final class VideoSource implements AutoCloseable {
+    /**
+     * Absolute local video file.
+     */
     public final File file;
+    /**
+     * Display-oriented source width in pixels, accounting for rotation metadata.
+     */
     public final int width;
+    /**
+     * Display-oriented source height in pixels, accounting for rotation metadata.
+     */
     public final int height;
+    /**
+     * Video duration in seconds.
+     */
     public final double duration;
+    /**
+     * Source average frame rate.
+     */
     public final double sourceFps;
     private final Path scratch;
     private volatile Process process;
@@ -28,9 +47,18 @@ public final class VideoSource implements AutoCloseable {
         scratch = Files.createTempDirectory("galler-art-video-");
     }
 
-    /** Shares immutable metadata only; decoder process and scratch files are independent. */
+    /**
+     * Shares immutable metadata only; decoder process and scratch files are independent.
+     * @return new session owned by the caller
+     * @throws IOException if this session is closed or scratch space cannot be created
+     */
     public VideoSource fork() throws IOException { return new VideoSource(this); }
 
+    /**
+     * Resolves an executable override, then the project-local Windows binary, then a command on PATH.
+     * @param name ffmpeg or ffprobe executable name
+     * @return executable path or command name
+     */
     public static String executable(String name) {
         String override = System.getenv(name.toUpperCase(Locale.ROOT) + "_PATH");
         if (override != null && !override.isBlank()) return override;
@@ -38,6 +66,11 @@ public final class VideoSource implements AutoCloseable {
         return Files.isRegularFile(local) ? local.toAbsolutePath().toString() : name;
     }
 
+    /**
+     * Probes local video metadata and allocates decoder scratch space.
+     * @param file local input media file
+     * @throws Exception if reading, processing, or validation fails
+     */
     public VideoSource(File file) throws Exception {
         if (!file.isFile()) throw new IOException("Video file not found: " + file);
         this.file = file.getAbsoluteFile();
@@ -78,11 +111,21 @@ public final class VideoSource implements AutoCloseable {
         }
     }
 
+    /**
+     * Computes the number of regular timeline samples at the requested rate.
+     * @param fps sample rate from 1 through 120 frames per second
+     * @return positive number of timeline samples
+     */
     public int frameCount(double fps) {
         if (!Double.isFinite(fps) || fps < 1 || fps > 120) throw new IllegalArgumentException("FPS must be 1 to 120.");
         return (int) Math.max(1, Math.min(Integer.MAX_VALUE, Math.ceil(duration * fps - 0.000001)));
     }
 
+    /**
+     * Computes scaled decoded pixel dimensions and rejects frames above the pixel limits.
+     * @param scale pixel scaling factor from 0.125 through 4
+     * @return width and height in decoded pixels
+     */
     public int[] scaledSize(double scale) {
         if (!Double.isFinite(scale) || scale < 0.125 || scale > 4) {
             throw new IllegalArgumentException("Video scale must be between 12.5% and 400%.");
@@ -95,7 +138,14 @@ public final class VideoSource implements AutoCloseable {
         return new int[] {(int) w, (int) h};
     }
 
-    /** Samples the displayed frame at index / fps seconds, including variable-rate sources. */
+    /**
+     * Samples a frame at index divided by FPS seconds, including variable-rate sources.
+     * @param index zero-based timeline sample index
+     * @param fps sampling rate from 1 through 120 frames per second
+     * @param scale decoded pixel scaling factor from 0.125 through 4
+     * @return decoded RGB image
+     * @throws Exception if parameters are invalid, decoding fails, times out, or is interrupted
+     */
     public BufferedImage readFrame(int index, double fps, double scale) throws Exception {
         if (index < 0 || index >= frameCount(fps)) throw new IllegalArgumentException("Frame is outside the movie.");
         int[] size = scaledSize(scale);
@@ -138,6 +188,9 @@ public final class VideoSource implements AutoCloseable {
         }
     }
 
+    /**
+     * Cancels owned work and releases resources; repeated calls are safe.
+     */
     @Override
     public void close() {
         closed = true;

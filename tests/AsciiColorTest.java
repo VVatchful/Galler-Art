@@ -2,7 +2,14 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 
+/**
+ * Executable regression checks for RGB averaging, transparency, and color preview rendering.
+ */
 public class AsciiColorTest {
+    /**
+     * Runs executable regression checks for RGB averaging, transparency, and color preview rendering.
+     * @param args command-line arguments; see the README for supported options
+     */
     public static void main(String[] args) {
         BufferedImage primary = new BufferedImage(3, 2, BufferedImage.TYPE_INT_ARGB);
         int[] colors = {0xffff0000, 0xff00ff00, 0xff0000ff};

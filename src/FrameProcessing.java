@@ -5,6 +5,11 @@ import java.util.function.IntFunction;
 
 /** Bounded parallel work with deterministic frame order. */
 public final class FrameProcessing {
+    /**
+     * Chooses one to four workers using available processors and an estimated per-frame memory budget.
+     * @param estimatedBytesPerFrame estimated working-set bytes for one frame, not an exact memory measurement
+     * @return a concurrency count from one through four
+     */
     public static int workerCount(long estimatedBytesPerFrame) {
         long budget = Math.min(128L * 1024 * 1024, Runtime.getRuntime().maxMemory() / 8);
         return (int) Math.max(1, Math.min(Math.min(4, Runtime.getRuntime().availableProcessors()),
@@ -20,6 +25,15 @@ public final class FrameProcessing {
                 });
     }
 
+    /**
+     * Converts bounded groups concurrently and returns results in input order. Outstanding work is cancelled on exit.
+     * @param <T> conversion result type
+     * @param count nonnegative number of inputs
+     * @param workers positive concurrency limit
+     * @param conversion non-null conversion function indexed from zero
+     * @return immutable ordered results
+     * @throws Exception if reading, processing, or validation fails
+     */
     public static <T> List<T> ordered(int count, int workers, IntFunction<T> conversion) throws Exception {
         ThreadPoolExecutor executor = pool(workers);
         List<Future<T>> pending = new ArrayList<>();
@@ -40,15 +54,35 @@ public final class FrameProcessing {
         }
     }
 
+    /**
+     * Immutable conversion settings shared by independent frame workers.
+     */
     public static final class Settings {
         final int columns;
         final boolean contrast, invert;
         final double clip;
         final ImageInspect.OutputFormat format;
         final ImageInspect.Effects effects;
+        /**
+         * Captures conversion options for worker tasks; validation occurs when a frame is converted.
+         * @param columns positive requested character width
+         * @param contrast whether to stretch the brightness range
+         * @param clip fraction clipped at each brightness extreme, in [0, 0.5)
+         * @param invert whether to reverse character brightness
+         * @param format canvas preset or export format, as appropriate
+         */
         public Settings(int columns, boolean contrast, double clip, boolean invert, ImageInspect.OutputFormat format) {
             this(columns, contrast, clip, invert, format, ImageInspect.DEFAULT_EFFECTS);
         }
+        /**
+         * Captures conversion options for worker tasks; validation occurs when a frame is converted.
+         * @param columns positive requested character width
+         * @param contrast whether to stretch the brightness range
+         * @param clip fraction clipped at each brightness extreme, in [0, 0.5)
+         * @param invert whether to reverse character brightness
+         * @param format canvas preset or export format, as appropriate
+         * @param effects non-null edge, dither, and palette settings
+         */
         public Settings(int columns, boolean contrast, double clip, boolean invert, ImageInspect.OutputFormat format, ImageInspect.Effects effects) {
             this.columns = columns; this.contrast = contrast; this.clip = clip; this.invert = invert; this.format = format;
             this.effects = effects;
@@ -67,6 +101,9 @@ public final class FrameProcessing {
         }
     }
 
+    /**
+     * One decoded video image, its ASCII conversion, and measured processing durations.
+     */
     public static final class Frame {
         final BufferedImage image;
         final ImageInspect.AsciiResult ascii;
@@ -83,14 +120,32 @@ public final class FrameProcessing {
         private final Settings settings;
         private final ThreadPoolExecutor executor;
         private final Map<Integer, Future<Frame>> frames = new LinkedHashMap<>();
+        /**
+         * Maximum retained frame jobs in the look-ahead window.
+         */
         public final int capacity;
         private final int frameCount;
         private boolean closed;
 
+        /**
+         * Creates a bounded decoder window; frames are scheduled lazily by get.
+         * @param source open source decoder whose metadata is shared by independent jobs
+         * @param fps sample rate from 1 through 120 frames per second
+         * @param scale pixel scaling factor from 0.125 through 4
+         * @param settings immutable frame conversion options
+         */
         public VideoWindow(VideoSource source, double fps, double scale, Settings settings) {
             this(source, fps, scale, settings, source.frameCount(fps));
         }
 
+        /**
+         * Creates a bounded decoder window; frames are scheduled lazily by get.
+         * @param source open source decoder whose metadata is shared by independent jobs
+         * @param fps sample rate from 1 through 120 frames per second
+         * @param scale pixel scaling factor from 0.125 through 4
+         * @param settings immutable frame conversion options
+         * @param limit positive maximum number of timeline samples exposed by this window
+         */
         public VideoWindow(VideoSource source, double fps, double scale, Settings settings, int limit) {
             this.source = source; this.fps = fps; this.scale = scale; this.settings = settings;
             frameCount = Math.min(source.frameCount(fps), limit);
@@ -100,6 +155,12 @@ public final class FrameProcessing {
             executor = pool(capacity);
         }
 
+        /**
+         * Returns the requested frame, blocking for decoding if necessary, and schedules bounded look-ahead work. Call off the Swing event thread.
+         * @param index zero-based frame sample index
+         * @return decoded frame and conversion timings
+         * @throws Exception if reading, processing, or validation fails
+         */
         public Frame get(int index) throws Exception {
             Future<Frame> current;
             synchronized (this) {
@@ -131,11 +192,18 @@ public final class FrameProcessing {
             return current.get();
         }
 
+        /**
+         * Returns the number of cached or scheduled frame jobs, including unfinished jobs.
+         * @return current job count
+         */
         public synchronized int bufferedFrames() { return frames.size(); }
         boolean awaitStopped(long timeout, TimeUnit unit) throws InterruptedException {
             return executor.awaitTermination(timeout, unit);
         }
 
+        /**
+         * Cancels owned work and releases resources; repeated calls are safe.
+         */
         public synchronized void close() {
             closed = true;
             for (Future<Frame> future : frames.values()) future.cancel(true);

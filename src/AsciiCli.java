@@ -12,10 +12,21 @@ public final class AsciiCli {
             "fps", "scale", "format", "outputDir", "recursive", "overwrite", "maxFrames", "dither", "edges", "palette");
     private static final Set<String> EXTENSIONS = Set.of("png", "jpg", "jpeg", "bmp", "gif", "mp4");
 
+    /**
+     * Runs the command-line entry point; consult the README for invocation examples.
+     * @param args command-line arguments; see the README for supported options
+     */
     public static void main(String[] args) {
         System.exit(run(args, new PrintStream(System.out, true, StandardCharsets.UTF_8), System.err));
     }
 
+    /**
+     * Runs the CLI without exiting the JVM; writes payloads to stdout and diagnostics to stderr.
+     * @param args command-line arguments; see the README for supported options
+     * @param out payload output stream, owned by the caller
+     * @param err diagnostic output stream, owned by the caller
+     * @return 0 for success, 1 for conversion/output errors, or 2 for invalid settings
+     */
     public static int run(String[] args, PrintStream out, PrintStream err) {
         Options options;
         try {

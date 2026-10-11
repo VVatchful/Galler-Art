@@ -10,6 +10,9 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.filechooser.FileNameExtensionFilter;
 
+/**
+ * Swing media viewer and converter with bounded background processing and live JVM metrics.
+ */
 public class AsciiDashboard extends JFrame {
     private final JButton choose = new JButton("Choose image or MP4...");
     private final JComboBox<String> videoScale = new JComboBox<>(new String[] {"25%", "50%", "100%", "150%", "200%"});
@@ -66,6 +69,9 @@ public class AsciiDashboard extends JFrame {
     private String timingScope = "load/batch";
     private SwingWorker<?, ?> activeConversion;
 
+    /**
+     * Builds dashboard controls and starts the one-second metrics sampler. Construct on the Swing event-dispatch thread.
+     */
     public AsciiDashboard() {
         super("Galler-Art | ASCII Studio");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -185,8 +191,20 @@ public class AsciiDashboard extends JFrame {
         dither.addActionListener(event -> invalidatePreview());
         edges.addActionListener(event -> invalidatePreview());
         palette.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            /**
+             * Invalidates generated output after inserting palette characters.
+             * @param event Swing document change notification
+             */
             public void insertUpdate(javax.swing.event.DocumentEvent event) { invalidatePreview(); }
+            /**
+             * Invalidates generated output after removing palette characters.
+             * @param event Swing document change notification
+             */
             public void removeUpdate(javax.swing.event.DocumentEvent event) { invalidatePreview(); }
+            /**
+             * Invalidates generated output after a palette document attribute change.
+             * @param event Swing document change notification
+             */
             public void changedUpdate(javax.swing.event.DocumentEvent event) { invalidatePreview(); }
         });
         fontSize.addChangeListener(event -> updateFont());
@@ -382,6 +400,9 @@ public class AsciiDashboard extends JFrame {
         if (video == null) scheduleNextFrame();
     }
 
+    /**
+     * Stops playback, profiling, conversion jobs, and decoder resources before disposing the window.
+     */
     @Override
     public void dispose() {
         disposed = true;
@@ -746,6 +767,10 @@ public class AsciiDashboard extends JFrame {
             repaint();
         }
 
+        /**
+         * Returns the fitted preview size or the full scrollable character-grid dimensions.
+         * @return preferred component dimensions
+         */
         @Override
         public Dimension getPreferredSize() {
             if (fit) return new Dimension(400, 300);
@@ -820,6 +845,10 @@ public class AsciiDashboard extends JFrame {
         }
     }
 
+    /**
+     * Launches the Swing dashboard on the event-dispatch thread.
+     * @param args command-line arguments; see the README for supported options
+     */
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> new AsciiDashboard().setVisible(true));
     }

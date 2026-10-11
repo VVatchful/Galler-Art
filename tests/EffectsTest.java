@@ -5,7 +5,15 @@ import java.nio.file.*;
 import java.util.Arrays;
 import javax.imageio.ImageIO;
 
+/**
+ * Executable regression checks for dithering, outlines, custom palettes, escaping, and configuration parity.
+ */
 public class EffectsTest {
+    /**
+     * Runs executable regression checks for dithering, outlines, custom palettes, escaping, and configuration parity.
+     * @param args command-line arguments; see the README for supported options
+     * @throws Exception if reading, processing, or validation fails
+     */
     public static void main(String[] args) throws Exception {
         double[] mid = new double[1024];
         Arrays.fill(mid, 0.3);

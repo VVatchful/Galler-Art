@@ -2,6 +2,38 @@
 
 A Java image-to-ASCII converter with a small desktop dashboard. Requires JDK 11 or newer.
 
+## Before and after
+
+These screenshots compare the repository's sample image (left) with actual Swing
+ASCII preview output (right). All use 160 columns, original proportions, and 2%
+contrast clipping. Open the images at full size to inspect individual characters.
+
+**Grayscale** — the default character palette:
+
+![Original image beside the grayscale ASCII preview](docs/images/grayscale.png)
+
+**RGB color** — the same character mapping with averaged source colors:
+
+![Original image beside the RGB ASCII preview](docs/images/color.png)
+
+**Floyd–Steinberg dithering** — a two-character palette (space and `@`):
+
+![Original image beside the dithered ASCII preview](docs/images/dither.png)
+
+**Canny outlines** — the same two-character palette, without dithering:
+
+![Original image beside the Canny outline preview](docs/images/edges.png)
+
+These are offscreen captures of the real preview component, not full-desktop
+screenshots. [Reproduce the screenshots](docs/examples.md) from source.
+
+## Developer documentation
+
+See [docs/](docs/README.md) for JavaDoc generation, the
+[architecture overview](docs/architecture.md),
+[ASCII conversion pipeline](docs/ascii-pipeline.md), and
+[video decode flow](docs/video-flow.md).
+
 ## Dashboard
 
 From PowerShell in the project folder:
