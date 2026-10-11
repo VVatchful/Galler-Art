@@ -16,10 +16,19 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 
+/**
+ * Reads images and GIFs, converts sampled RGB cells to ASCII, and serializes frame exports.
+ */
 public class ImageInspect {
+    /**
+     * A fully composed source frame and its original display delay.
+     */
     public static final class ImageFrame {
         /** Independent, fully composed logical-screen image, before disposal. */
         public final BufferedImage image;
+        /**
+         * Original frame delay in milliseconds; zero for still images.
+         */
         public final int delayMillis;
 
         private ImageFrame(BufferedImage image, int delayMillis) {
@@ -28,7 +37,12 @@ public class ImageInspect {
         }
     }
 
-    /** Reads still images or all GIF frames in display order. */
+    /**
+     * Reads a still image or composes all GIF frames in display order.
+     * @param file local image or GIF file
+     * @return immutable list of fully composed frames; MP4 input is handled by {@link VideoSource}
+     * @throws IOException if the file cannot be read or its format is unsupported
+     */
     public static List<ImageFrame> readFrames(File file) throws IOException {
         try (ImageInputStream input = ImageIO.createImageInputStream(file)) {
             if (input == null) throw new IOException("Cannot open image: " + file);
@@ -129,6 +143,9 @@ public class ImageInspect {
         return result;
     }
 
+    /**
+     * Canvas proportions and default text widths; pixel labels are presets, not raster exports.
+     */
     public enum OutputFormat {
         ORIGINAL("Keep original proportions", 0, 0, 160),
         SD("SD - 640 x 480 (4:3)", 640, 480, 80),
@@ -152,10 +169,21 @@ public class ImageInspect {
             this.columns = columns;
         }
 
+        /**
+         * Returns the human-readable preset label.
+         * @return display label
+         */
         public String toString() { return label; }
     }
 
     // Cells are modeled as twice as tall as they are wide, as in the original converter.
+    /**
+     * Computes ASCII columns and rows using a 1:2 character-cell ratio.
+     * @param image non-null decoded source image
+     * @param columns positive requested character width
+     * @param format non-null output canvas preset
+     * @return two-element array containing columns and rows
+     */
     public static int[] outputSize(BufferedImage image, int columns, OutputFormat format) {
         if (columns < 1) throw new IllegalArgumentException("Columns must be positive.");
         int width = format == OutputFormat.ORIGINAL ? Math.min(columns, image.getWidth()) : columns;
@@ -165,14 +193,41 @@ public class ImageInspect {
         return new int[] {width, Math.max(1, (int) Math.round(width * ratio * 0.5))};
     }
 
+    /**
+     * Default sparse-to-dense character palette.
+     */
     public static final String CHARACTERS = " .:-=+*#%@";
+    /**
+     * Character-level quantization modes applied after contrast and inversion.
+     */
     public enum Dither { NONE, FLOYD_STEINBERG, BAYER }
+    /**
+     * Outline detectors applied to the fitted luminance grid before contrast adjustment.
+     */
     public enum Edges { NONE, SOBEL, CANNY }
 
+    /**
+     * Immutable effect selection with a validated dark-to-light printable ASCII palette.
+     */
     public static final class Effects {
+        /**
+         * Selected quantization method.
+         */
         public final Dither dither;
+        /**
+         * Selected outline detector.
+         */
         public final Edges edges;
+        /**
+         * Validated sparse-to-dense printable ASCII palette.
+         */
         public final String palette;
+        /**
+         * Validates and captures an immutable effect selection.
+         * @param dither non-null quantization mode
+         * @param edges non-null outline mode
+         * @param palette 2 to 256 printable ASCII characters ordered dark to light
+         */
         public Effects(Dither dither, Edges edges, String palette) {
             if (palette == null || palette.length() < 2 || palette.length() > 256)
                 throw new IllegalArgumentException("Palette must contain 2 to 256 printable ASCII characters, ordered dark to light.");
@@ -183,6 +238,7 @@ public class ImageInspect {
             this.palette = palette;
         }
     }
+    /** Default palette with dithering and edge detection disabled. */
     public static final Effects DEFAULT_EFFECTS = new Effects(Dither.NONE, Edges.NONE, CHARACTERS);
 
     private static double sample(double[] values, int w, int h, int x, int y) {
@@ -282,15 +338,33 @@ public class ImageInspect {
     }
     private static final double CONTRAST_CLIP = 0.02;
 
+    /**
+     * Single-frame serialization formats and their filename extensions.
+     */
     public enum ExportFormat {
         TXT("txt"), HTML("html"), ANSI("ans"), BBCODE("bbcode"), MARKDOWN("md"), SVG("svg");
+        /**
+         * Filename extension without the leading dot.
+         */
         public final String extension;
         ExportFormat(String extension) { this.extension = extension; }
     }
 
+    /**
+     * An ASCII grid with row-major RGB samples; each text row ends with a newline.
+     */
     public static final class AsciiResult {
+        /**
+         * Newline-terminated character grid, including blank padding.
+         */
         public final String text;
+        /**
+         * Number of character columns, including canvas padding.
+         */
         public final int width;
+        /**
+         * Number of character rows, including canvas padding.
+         */
         public final int height;
         private final int[] colors;
 
@@ -301,8 +375,20 @@ public class ImageInspect {
             this.colors = colors;
         }
 
+        /**
+         * Returns the packed 0xRRGGBB sample at a zero-based grid coordinate.
+         * @param x zero-based column
+         * @param y zero-based row
+         * @return packed 24-bit RGB value
+         */
         public int rgbAt(int x, int y) { return colors[y * width + x]; }
 
+        /**
+         * Serializes this frame in the requested format without changing its character grid.
+         * @param format non-null serialization format
+         * @param color whether to preserve source RGB colors where the export format supports them
+         * @return serialized frame content
+         */
         public String export(ExportFormat format, boolean color) {
             switch (format) {
                 case TXT: return text;
@@ -330,6 +416,11 @@ public class ImageInspect {
             }
         }
 
+        /**
+         * Emits terminal SGR sequences, a black background, and a style reset after each row.
+         * @param color whether to preserve source RGB colors where the export format supports them
+         * @return serialized frame content
+         */
         public String toAnsi(boolean color) {
             StringBuilder ansi = new StringBuilder();
             for (int y = 0; y < height; y++) {
@@ -351,6 +442,11 @@ public class ImageInspect {
             return ansi.toString();
         }
 
+        /**
+         * Emits preformatted monospace BBCode; the receiving forum must support the tags and entity escapes.
+         * @param color whether to preserve source RGB colors where the export format supports them
+         * @return serialized frame content
+         */
         public String toBbcode(boolean color) {
             StringBuilder bb = new StringBuilder("[pre][font=monospace]");
             for (int y = 0; y < height; y++) {
@@ -365,6 +461,11 @@ public class ImageInspect {
             return bb.append("[/font][/pre]\n").toString();
         }
 
+        /**
+         * Emits fenced plain text or inline-styled HTML, escaping custom glyphs and avoiding fence collisions.
+         * @param color whether to preserve source RGB colors where the export format supports them
+         * @return serialized frame content
+         */
         public String toMarkdown(boolean color) {
             if (!color) {
                 int longest = 0, run = 0;
@@ -379,6 +480,11 @@ public class ImageInspect {
                     + html.substring(start, html.indexOf("</pre>")) + "</pre>\n";
         }
 
+        /**
+         * Emits scalable SVG text on black using an 8-by-16-unit character grid.
+         * @param color whether to preserve source RGB colors where the export format supports them
+         * @return serialized frame content
+         */
         public String toSvg(boolean color) {
             long pixelWidth = (long) width * 8;
             long pixelHeight = (long) height * 16;
@@ -400,6 +506,11 @@ public class ImageInspect {
             return svg.append("</g>\n</svg>\n").toString();
         }
 
+        /**
+         * Emits a standalone HTML document preserving whitespace and optional RGB colors.
+         * @param color whether to preserve source RGB colors where the export format supports them
+         * @return serialized frame content
+         */
         public String toHtml(boolean color) {
             StringBuilder html = new StringBuilder("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">"
                     + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
@@ -426,6 +537,11 @@ public class ImageInspect {
         }
     }
 
+    /**
+     * Runs the command-line entry point; consult the README for invocation examples.
+     * @param args command-line arguments; see the README for supported options
+     * @throws IOException if reading, processing, or validation fails
+     */
     public static void main(String[] args) throws IOException {
         File imagefile = new File(args.length > 0 ? args[0] : "Images/img.png");
         if (!imagefile.isFile()) {
@@ -449,25 +565,71 @@ public class ImageInspect {
         }
     }
 
+    /**
+     * Converts an image to newline-terminated ASCII text using the supplied settings and default effects.
+     * @param image non-null decoded source image
+     * @param columns positive requested character width
+     * @return ASCII text with a newline after each row
+     */
     public static String toAscii(BufferedImage image, int columns) {
         return toAscii(image, columns, true, CONTRAST_CLIP, false);
     }
 
+    /**
+     * Converts an image to newline-terminated ASCII text using the supplied settings and default effects.
+     * @param image non-null decoded source image
+     * @param columns positive requested character width
+     * @param autoContrast whether to stretch the brightness range
+     * @param contrastClip fraction clipped at each brightness extreme, in [0, 0.5)
+     * @param invert whether to reverse character brightness
+     * @return ASCII text with a newline after each row
+     */
     public static String toAscii(BufferedImage image, int columns, boolean autoContrast,
                                  double contrastClip, boolean invert) {
         return toAscii(image, columns, autoContrast, contrastClip, invert, OutputFormat.ORIGINAL);
     }
 
+    /**
+     * Converts an image to newline-terminated ASCII text using the supplied settings and default effects.
+     * @param image non-null decoded source image
+     * @param columns positive requested character width
+     * @param autoContrast whether to stretch the brightness range
+     * @param contrastClip fraction clipped at each brightness extreme, in [0, 0.5)
+     * @param invert whether to reverse character brightness
+     * @param format non-null output canvas preset
+     * @return ASCII text with a newline after each row
+     */
     public static String toAscii(BufferedImage image, int columns, boolean autoContrast,
                                  double contrastClip, boolean invert, OutputFormat format) {
         return convert(image, columns, autoContrast, contrastClip, invert, format).text;
     }
 
+    /**
+     * Fits the source, averages RGB/luminance, applies effects and quantization, then adds blank canvas padding.
+     * @param image non-null decoded source image
+     * @param columns positive requested character width
+     * @param autoContrast whether to stretch the brightness range
+     * @param contrastClip fraction clipped at each brightness extreme, in [0, 0.5)
+     * @param invert whether to reverse character brightness
+     * @param format non-null output canvas preset
+     * @return character grid and original averaged RGB values
+     */
     public static AsciiResult convert(BufferedImage image, int columns, boolean autoContrast,
                                       double contrastClip, boolean invert, OutputFormat format) {
         return convert(image, columns, autoContrast, contrastClip, invert, format, DEFAULT_EFFECTS);
     }
 
+    /**
+     * Fits the source, averages RGB/luminance, applies effects and quantization, then adds blank canvas padding.
+     * @param image non-null decoded source image
+     * @param columns positive requested character width
+     * @param autoContrast whether to stretch the brightness range
+     * @param contrastClip fraction clipped at each brightness extreme, in [0, 0.5)
+     * @param invert whether to reverse character brightness
+     * @param format non-null output canvas preset
+     * @param effects non-null edge, dither, and palette settings
+     * @return character grid and original averaged RGB values
+     */
     public static AsciiResult convert(BufferedImage image, int columns, boolean autoContrast,
                                       double contrastClip, boolean invert, OutputFormat format, Effects effects) {
         if (columns < 1) {

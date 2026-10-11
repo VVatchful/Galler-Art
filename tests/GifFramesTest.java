@@ -10,12 +10,20 @@ import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageOutputStream;
 
+/**
+ * Executable regression checks for GIF disposal, offsets, palettes, transparency, and timing.
+ */
 public class GifFramesTest {
     private static final int[] PALETTE = {
             0xff000000, 0xffff0000, 0xff00ff00, 0xff0000ff,
             0xffffffff, 0xffffff00, 0xff00ffff, 0xffff00ff
     };
 
+    /**
+     * Runs executable regression checks for GIF disposal, offsets, palettes, transparency, and timing.
+     * @param args command-line arguments; see the README for supported options
+     * @throws Exception if reading, processing, or validation fails
+     */
     public static void main(String[] args) throws Exception {
         Path file = Files.createTempFile("galler-art-frames-", ".gif");
         try {

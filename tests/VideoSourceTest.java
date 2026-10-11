@@ -5,9 +5,17 @@ import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 import javax.swing.*;
 
+/**
+ * Executable regression checks for MP4 decoding, scaling, seeking, bounded prefetch, and dashboard playback.
+ */
 public class VideoSourceTest {
     private static AsciiDashboard dashboard;
 
+    /**
+     * Runs executable regression checks for MP4 decoding, scaling, seeking, bounded prefetch, and dashboard playback.
+     * @param args command-line arguments; see the README for supported options
+     * @throws Exception if reading, processing, or validation fails
+     */
     public static void main(String[] args) throws Exception {
         Path directory = Files.createTempDirectory("galler video test ");
         Path movie = directory.resolve("test movie.mp4");

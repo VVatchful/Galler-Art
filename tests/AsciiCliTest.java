@@ -8,12 +8,20 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import javax.imageio.ImageIO;
 
+/**
+ * Executable regression checks for batch paths, configuration, stdout, and mixed-media conversion.
+ */
 public class AsciiCliTest {
     private static final class Result {
         int code;
         String stdout, stderr;
     }
 
+    /**
+     * Runs executable regression checks for batch paths, configuration, stdout, and mixed-media conversion.
+     * @param args command-line arguments; see the README for supported options
+     * @throws Exception if reading, processing, or validation fails
+     */
     public static void main(String[] args) throws Exception {
         Path root = Files.createTempDirectory("ascii-cli-tests-");
         try {

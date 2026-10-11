@@ -1,6 +1,13 @@
 import java.awt.image.BufferedImage;
 
+/**
+ * Executable regression checks for grayscale mapping, contrast, and canvas fitting.
+ */
 public class ImageInspectTest {
+    /**
+     * Runs executable regression checks for grayscale mapping, contrast, and canvas fitting.
+     * @param args command-line arguments; see the README for supported options
+     */
     public static void main(String[] args) {
         BufferedImage gradient = new BufferedImage(100, 2, BufferedImage.TYPE_INT_RGB);
         for (int x = 0; x < 100; x++) {

@@ -7,6 +7,12 @@ import java.util.Map;
 public final class ConversionConfig {
     private ConversionConfig() { }
 
+    /**
+     * Reads one flat JSON or YAML mapping, rejecting duplicate keys, null values, and unsupported structures.
+     * @param path UTF-8 JSON or YAML config path
+     * @return insertion-ordered scalar settings; schema validation is performed by the CLI
+     * @throws Exception if reading, processing, or validation fails
+     */
     public static Map<String, String> read(Path path) throws Exception {
         String text = Files.readString(path);
         if (text.startsWith("\ufeff")) text = text.substring(1);

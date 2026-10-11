@@ -4,7 +4,15 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Executable regression checks for concurrency, ordering, cancellation-related limits, and paint timing.
+ */
 public class FrameProcessingTest {
+    /**
+     * Runs executable regression checks for concurrency, ordering, cancellation-related limits, and paint timing.
+     * @param args command-line arguments; see the README for supported options
+     * @throws Exception if reading, processing, or validation fails
+     */
     public static void main(String[] args) throws Exception {
         AtomicInteger active = new AtomicInteger(), maximum = new AtomicInteger();
         CountDownLatch overlap = new CountDownLatch(2);

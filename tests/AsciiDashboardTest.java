@@ -5,9 +5,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import javax.swing.*;
 
+/**
+ * Executable regression checks for dashboard controls, GIF playback, and preview invalidation.
+ */
 public class AsciiDashboardTest {
     private static AsciiDashboard dashboard;
 
+    /**
+     * Runs executable regression checks for dashboard controls, GIF playback, and preview invalidation.
+     * @param args command-line arguments; see the README for supported options
+     * @throws Exception if reading, processing, or validation fails
+     */
     public static void main(String[] args) throws Exception {
         Path gif = Files.createTempFile("galler-art-dashboard-", ".gif");
         try {
