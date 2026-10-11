@@ -18,6 +18,11 @@ RGB colors, whole-image fitting, resolution presets, and desktop playback.
 - Target JDK 11+. Keep the simple `javac` workflow; avoid adding build/runtime dependencies without a concrete need.
 - Reuse the shared converter rather than creating separate grayscale or RGB algorithms for the CLI.
 - Fit the complete source with padding; do not silently crop or distort it.
+- Effects run on the fitted content grid before padding: optional Sobel/Canny edges,
+  contrast and inversion, then optional Floyd-Steinberg/Bayer quantization using the
+  custom palette. Preserve sampled RGB values. Defaults must retain previous output.
+- Palettes accept 2–256 printable ASCII characters. Escape custom glyphs in markup
+  exports and avoid Markdown fence collisions; never allow terminal control bytes.
 - Distinguish decoded pixel dimensions from ASCII columns/rows. Text cells use a 1:2 width/height ratio.
 - Process movie frames incrementally; do not retain whole movies in memory.
 - Keep GIF composition sequential; parallelize only composed frame conversion. Cap workers and video buffers, preserve order, and cancel stale work on settings/media changes.
@@ -34,7 +39,7 @@ RGB colors, whole-image fitting, resolution presets, and desktop playback.
 ## Validation
 Compile `src/*.java` and `tests/*.java` to an ignored build directory using `javac`.
 Run the relevant executable tests: `ImageInspectTest`, `AsciiColorTest`,
-`GifFramesTest`, `AsciiDashboardTest`, `VideoSourceTest`, `AsciiCliTest`, `ExportFormatsTest`, and `FrameProcessingTest`.
+`GifFramesTest`, `AsciiDashboardTest`, `VideoSourceTest`, `AsciiCliTest`, `ExportFormatsTest`, `FrameProcessingTest`, and `EffectsTest`.
 Video tests need FFmpeg/ffprobe (`setup-ffmpeg.ps1` installs project-local binaries).
 Run `git diff --check` and report checks actually performed and any limitations.
 

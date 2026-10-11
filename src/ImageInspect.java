@@ -165,7 +165,121 @@ public class ImageInspect {
         return new int[] {width, Math.max(1, (int) Math.round(width * ratio * 0.5))};
     }
 
-    private static final String CHARACTERS = " .:-=+*#%@";
+    public static final String CHARACTERS = " .:-=+*#%@";
+    public enum Dither { NONE, FLOYD_STEINBERG, BAYER }
+    public enum Edges { NONE, SOBEL, CANNY }
+
+    public static final class Effects {
+        public final Dither dither;
+        public final Edges edges;
+        public final String palette;
+        public Effects(Dither dither, Edges edges, String palette) {
+            if (palette == null || palette.length() < 2 || palette.length() > 256)
+                throw new IllegalArgumentException("Palette must contain 2 to 256 printable ASCII characters, ordered dark to light.");
+            for (char c : palette.toCharArray()) if (c < 32 || c > 126)
+                throw new IllegalArgumentException("Palette supports printable ASCII only; no tabs, newlines, or terminal escapes.");
+            this.dither = java.util.Objects.requireNonNull(dither);
+            this.edges = java.util.Objects.requireNonNull(edges);
+            this.palette = palette;
+        }
+    }
+    public static final Effects DEFAULT_EFFECTS = new Effects(Dither.NONE, Edges.NONE, CHARACTERS);
+
+    private static double sample(double[] values, int w, int h, int x, int y) {
+        return values[Math.max(0, Math.min(h - 1, y)) * w + Math.max(0, Math.min(w - 1, x))];
+    }
+
+    static double[] edgeMap(double[] values, int w, int h, Edges mode) {
+        if (mode == Edges.NONE) return values;
+        double[] input = values;
+        if (mode == Edges.CANNY) {
+            input = new double[values.length];
+            int[] kernel = {1, 2, 1};
+            for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+                double sum = 0;
+                for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++)
+                    sum += sample(values, w, h, x + i, y + j) * kernel[i + 1] * kernel[j + 1];
+                input[y * w + x] = sum / 16;
+            }
+        }
+        double[] magnitude = new double[values.length];
+        int[] direction = new int[values.length];
+        for (int y = 0; y < h; y++) {
+            if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException();
+            for (int x = 0; x < w; x++) {
+                double gx = 0, gy = 0;
+                for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+                    double v = sample(input, w, h, x + i, y + j);
+                    gx += v * i * (j == 0 ? 2 : 1);
+                    gy += v * j * (i == 0 ? 2 : 1);
+                }
+                magnitude[y * w + x] = Math.min(255, Math.hypot(gx, gy) / 4);
+                if (magnitude[y * w + x] < 1e-9) magnitude[y * w + x] = 0;
+                double angle = (Math.toDegrees(Math.atan2(gy, gx)) + 180) % 180;
+                direction[y * w + x] = ((int) Math.round(angle / 45)) % 4;
+            }
+        }
+        if (mode == Edges.SOBEL) return magnitude;
+        double[] thin = new double[values.length];
+        int[] dx = {1, 1, 0, -1}, dy = {0, 1, 1, 1};
+        double max = 0;
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+            int at = y * w + x, d = direction[at];
+            double value = magnitude[at];
+            if (value > 0 && value >= sample(magnitude, w, h, x + dx[d], y + dy[d])
+                    && value > sample(magnitude, w, h, x - dx[d], y - dy[d])) {
+                thin[at] = value;
+                max = Math.max(max, value);
+            }
+        }
+        double[] result = new double[values.length];
+        if (max == 0) return result;
+        int[] queue = new int[values.length];
+        int head = 0, tail = 0;
+        for (int i = 0; i < thin.length; i++) if (thin[i] >= max * 0.2) {
+            result[i] = 255; queue[tail++] = i;
+        }
+        while (head < tail) {
+            int at = queue[head++], x = at % w, y = at / w;
+            for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+                int nx = x + i, ny = y + j;
+                if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                int next = ny * w + nx;
+                if (result[next] == 0 && thin[next] >= max * 0.1) {
+                    result[next] = 255; queue[tail++] = next;
+                }
+            }
+        }
+        return result;
+    }
+
+    static char[] quantize(double[] normalized, int w, int h, Effects effects) {
+        double[] work = normalized.clone();
+        char[] chars = new char[work.length];
+        int levels = effects.palette.length() - 1;
+        int[][] bayer = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+        for (int y = 0; y < h; y++) {
+            if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException();
+            for (int x = 0; x < w; x++) {
+                int at = y * w + x;
+                double v = work[at];
+                if (effects.dither == Dither.BAYER) v += ((bayer[y % 4][x % 4] + 0.5) / 16 - 0.5) / levels;
+                v = Math.max(0, Math.min(1, v));
+                int index = (int) Math.round(v * levels);
+                chars[at] = effects.palette.charAt(index);
+                if (effects.dither == Dither.FLOYD_STEINBERG) {
+                    double error = v - (double) index / levels;
+                    if (x + 1 < w) work[at + 1] += error * 7 / 16;
+                    if (y + 1 < h) {
+                        if (x > 0) work[at + w - 1] += error * 3 / 16;
+                        work[at + w] += error * 5 / 16;
+                        if (x + 1 < w) work[at + w + 1] += error / 16;
+                    }
+                }
+            }
+        }
+        return chars;
+    }
     private static final double CONTRAST_CLIP = 0.02;
 
     public enum ExportFormat {
@@ -243,7 +357,7 @@ public class ImageInspect {
                 for (int x = 0; x < width; x++) {
                     char c = text.charAt(y * (width + 1) + x);
                     if (color && c != ' ') bb.append("[color=#").append(hex(rgbAt(x, y))).append(']');
-                    bb.append(c); // The fixed ASCII ramp contains no BBCode delimiters.
+                    bb.append(c == '[' ? "&#91;" : c == ']' ? "&#93;" : escaped(c));
                     if (color && c != ' ') bb.append("[/color]");
                 }
                 bb.append('\n');
@@ -252,7 +366,12 @@ public class ImageInspect {
         }
 
         public String toMarkdown(boolean color) {
-            if (!color) return "```text\n" + text + "```\n";
+            if (!color) {
+                int longest = 0, run = 0;
+                for (char c : text.toCharArray()) { run = c == '`' ? run + 1 : 0; longest = Math.max(longest, run); }
+                String fence = "`".repeat(Math.max(3, longest + 1));
+                return fence + "text\n" + text + fence + "\n";
+            }
             String html = toHtml(true);
             int start = html.indexOf('>', html.indexOf("<pre ")) + 1;
             return "<pre style=\"background:#000;color:#e8edf4;font-family:monospace;font-size:16px;"
@@ -346,6 +465,11 @@ public class ImageInspect {
 
     public static AsciiResult convert(BufferedImage image, int columns, boolean autoContrast,
                                       double contrastClip, boolean invert, OutputFormat format) {
+        return convert(image, columns, autoContrast, contrastClip, invert, format, DEFAULT_EFFECTS);
+    }
+
+    public static AsciiResult convert(BufferedImage image, int columns, boolean autoContrast,
+                                      double contrastClip, boolean invert, OutputFormat format, Effects effects) {
         if (columns < 1) {
             throw new IllegalArgumentException("Columns must be positive.");
         }
@@ -400,6 +524,7 @@ public class ImageInspect {
             }
         }
 
+        brightnessValues = edgeMap(brightnessValues, width, height, effects.edges);
         double blackPoint = 0;
         double whitePoint = 255;
         if (autoContrast) {
@@ -416,6 +541,11 @@ public class ImageInspect {
             whitePoint = 255;
         }
 
+        for (int i = 0; i < brightnessValues.length; i++) {
+            double value = Math.max(0, Math.min(1, (brightnessValues[i] - blackPoint) / (whitePoint - blackPoint)));
+            brightnessValues[i] = invert ? 1 - value : value;
+        }
+        char[] glyphs = quantize(brightnessValues, width, height, effects);
         StringBuilder result = new StringBuilder();
         int[] outputColors = new int[Math.multiplyExact(canvas[0], canvas[1])];
         int left = (canvas[0] - width) / 2;
@@ -429,14 +559,7 @@ public class ImageInspect {
                     result.append(' ');
                     continue;
                 }
-                double normalized = (brightnessValues[y * width + x] - blackPoint)
-                        / (whitePoint - blackPoint);
-                normalized = Math.max(0, Math.min(1, normalized));
-                if (invert) {
-                    normalized = 1 - normalized;
-                }
-                int index = (int) Math.round(normalized * (CHARACTERS.length() - 1));
-                result.append(CHARACTERS.charAt(index));
+                result.append(glyphs[y * width + x]);
                 outputColors[canvasY * canvas[0] + canvasX] = cellColors[y * width + x];
             }
             result.append('\n');

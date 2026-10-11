@@ -45,20 +45,25 @@ public final class FrameProcessing {
         final boolean contrast, invert;
         final double clip;
         final ImageInspect.OutputFormat format;
+        final ImageInspect.Effects effects;
         public Settings(int columns, boolean contrast, double clip, boolean invert, ImageInspect.OutputFormat format) {
+            this(columns, contrast, clip, invert, format, ImageInspect.DEFAULT_EFFECTS);
+        }
+        public Settings(int columns, boolean contrast, double clip, boolean invert, ImageInspect.OutputFormat format, ImageInspect.Effects effects) {
             this.columns = columns; this.contrast = contrast; this.clip = clip; this.invert = invert; this.format = format;
+            this.effects = effects;
         }
         ImageInspect.AsciiResult convert(BufferedImage image) {
             int[] size = ImageInspect.outputSize(image, columns, format);
             if ((long) size[0] * size[1] > 4_000_000) throw new IllegalArgumentException("ASCII frame exceeds 4 million cells; reduce columns");
-            return ImageInspect.convert(image, columns, contrast, clip, invert, format);
+            return ImageInspect.convert(image, columns, contrast, clip, invert, format, effects);
         }
         long estimate(int width, int height) {
             double ratio = format == ImageInspect.OutputFormat.ORIGINAL ? (double) height / width
                     : (double) format.pixelHeight / format.pixelWidth;
             long cells = (long) columns * Math.max(1, Math.round(columns * ratio / 2));
             // Source + decode buffers and converter arrays, not an exact heap measurement.
-            return (long) width * height * 12 + cells * 48;
+            return (long) width * height * 12 + cells * 96;
         }
     }
 

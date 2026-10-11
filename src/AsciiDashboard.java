@@ -30,6 +30,9 @@ public class AsciiDashboard extends JFrame {
     private final JCheckBox contrast = new JCheckBox("Enhance contrast", true);
     private final JSpinner clipping = new JSpinner(new SpinnerNumberModel(2.0, 0.0, 20.0, 0.5));
     private final JCheckBox invert = new JCheckBox("Invert brightness");
+    private final JComboBox<ImageInspect.Dither> dither = new JComboBox<>(ImageInspect.Dither.values());
+    private final JComboBox<ImageInspect.Edges> edges = new JComboBox<>(ImageInspect.Edges.values());
+    private final JTextField palette = new JTextField(ImageInspect.CHARACTERS, 14);
     private final JSpinner fontSize = new JSpinner(new SpinnerNumberModel(8, 4, 24, 1));
     private final JTextArea preview = new JTextArea();
     private final JCheckBox fitPreview = new JCheckBox("Fit preview to window", true);
@@ -109,6 +112,10 @@ public class AsciiDashboard extends JFrame {
         addControl(settings, row("Clip each end (%)", clipping));
         clipping.setToolTipText("Trim extreme shadows and highlights before stretching grayscale.");
         addControl(settings, invert);
+        addControl(settings, row("Dithering", dither));
+        addControl(settings, row("Edge detection", edges));
+        addControl(settings, row("Character palette", palette));
+        palette.setToolTipText("2 to 256 printable ASCII characters, from dark/sparse to light/dense. Leading spaces matter.");
         addControl(settings, color);
         addControl(settings, fitPreview);
         addControl(settings, row("Preview font size", fontSize));
@@ -175,6 +182,13 @@ public class AsciiDashboard extends JFrame {
             invalidatePreview();
         });
         invert.addActionListener(event -> invalidatePreview());
+        dither.addActionListener(event -> invalidatePreview());
+        edges.addActionListener(event -> invalidatePreview());
+        palette.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void insertUpdate(javax.swing.event.DocumentEvent event) { invalidatePreview(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent event) { invalidatePreview(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent event) { invalidatePreview(); }
+        });
         fontSize.addChangeListener(event -> updateFont());
         fitPreview.addActionListener(event -> updatePreviewMode());
         updatePreviewMode();
@@ -276,6 +290,9 @@ public class AsciiDashboard extends JFrame {
         contrast.setEnabled(!busy);
         clipping.setEnabled(!busy && contrast.isSelected());
         invert.setEnabled(!busy);
+        dither.setEnabled(!busy);
+        edges.setEnabled(!busy);
+        palette.setEnabled(!busy);
         frame.setEnabled(!busy && totalFrames() > 1);
         videoScale.setEnabled(!busy && video != null);
         videoFps.setEnabled(!busy && video != null);
@@ -445,6 +462,9 @@ public class AsciiDashboard extends JFrame {
             generateVideoFrame();
             return;
         }
+        ImageInspect.Effects effects;
+        try { effects = selectedEffects(); }
+        catch (IllegalArgumentException exception) { showError(exception); return; }
         try {
             columns.commitEdit();
             clipping.commitEdit();
@@ -459,7 +479,7 @@ public class AsciiDashboard extends JFrame {
         ImageInspect.OutputFormat selectedFormat = (ImageInspect.OutputFormat) format.getSelectedItem();
         setBusy(true);
         status.setText("Generating ASCII...");
-        FrameProcessing.Settings settings = new FrameProcessing.Settings(width, enhance, clip, reverse, selectedFormat);
+        FrameProcessing.Settings settings = new FrameProcessing.Settings(width, enhance, clip, reverse, selectedFormat, effects);
         List<ImageInspect.ImageFrame> frames = sourceFrames;
         BufferedImage still = source;
         activeConversion = new SwingWorker<List<ImageInspect.AsciiResult>, Void>() {
@@ -547,6 +567,9 @@ public class AsciiDashboard extends JFrame {
 
     private void generateVideoFrame() {
         if (video == null || busy || disposed) return;
+        ImageInspect.Effects effects;
+        try { effects = selectedEffects(); }
+        catch (IllegalArgumentException exception) { showError(exception); return; }
         try {
             columns.commitEdit();
             clipping.commitEdit();
@@ -567,7 +590,7 @@ public class AsciiDashboard extends JFrame {
         if (videoWindow == null) {
             try {
                 videoWindow = new FrameProcessing.VideoWindow(currentVideo, fps, scale,
-                        new FrameProcessing.Settings(width, enhance, clip, reverse, selectedFormat));
+                        new FrameProcessing.Settings(width, enhance, clip, reverse, selectedFormat, effects));
             } catch (IllegalArgumentException exception) { showError(exception); return; }
         }
         FrameProcessing.VideoWindow window = videoWindow;
@@ -659,6 +682,11 @@ public class AsciiDashboard extends JFrame {
                     + generatedResult.width + " columns x " + generatedResult.height + " rows | "
                     + generatedFrames.size() + " frame(s) converted. Export saves the selected frame.");
         }
+    }
+
+    private ImageInspect.Effects selectedEffects() {
+        return new ImageInspect.Effects((ImageInspect.Dither) dither.getSelectedItem(),
+                (ImageInspect.Edges) edges.getSelectedItem(), palette.getText());
     }
 
     private void exportText() {
