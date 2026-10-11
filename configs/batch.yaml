@@ -3,6 +3,9 @@ preset: hd
 autoContrast: true
 clip: 0.02
 invert: false
+dither: none
+edges: none
+palette: ' .:-=+*#%@'
 color: true
 format: html
 fps: 12

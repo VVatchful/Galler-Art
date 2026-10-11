@@ -149,6 +149,53 @@ Decoding has a 30-second timeout per request. Pause stops advancement; already
 scheduled bounded look-ahead work may finish. Changing options or media cancels
 old buffered work; closing the dashboard stops workers and profiling timers.
 
+## Dithering, outlines, and custom characters
+
+The dashboard exposes **Dithering**, **Edge detection**, and **Character palette**.
+Change these options and select **Generate preview**. They apply to still images,
+every GIF frame, and video frames, including prefetched frames. Changing an effect
+invalidates the old preview/buffer. Defaults (`none`, `none`, ` .:-=+*#%@`) preserve
+the previous conversion behavior.
+
+- **Floyd–Steinberg** diffuses character quantization error to neighboring cells
+  using the 7/16, 3/16, 5/16, and 1/16 weights.
+- **Bayer** uses a deterministic 4×4 ordered threshold pattern. Dithering is most
+  visible with short palettes such as `' @'`, where it approximates intermediate tones.
+- **Sobel** produces grayscale gradient magnitudes to emphasize outlines.
+- **Canny** produces thinner binary outlines using 3×3 Gaussian smoothing, Sobel
+  gradients, non-maximum suppression, and 8-connected hysteresis. Its low/high
+  thresholds are fixed at 10%/20% of the maximum suppressed gradient. These stages
+  follow the [Canny approach](https://docs.opencv.org/4.12.0/d7/de1/tutorial_js_canny.html);
+  the implementation is local Java and requires no OpenCV dependency.
+- **Palette** contains 2–256 printable ASCII characters in dark/sparse to light/dense
+  order. Leading/trailing spaces are significant. For example, `' .oO@'` or
+  `' .,:;irsXA253hMHGS#9B&@'`. The converter assumes evenly spaced brightness levels;
+  it does not measure glyph coverage. Tabs, newlines, escape bytes, and non-ASCII
+  characters are rejected to preserve the fixed-width grid and safe terminal output.
+
+Effects operate on the sampled character grid, not full-resolution source pixels:
+edge detection → contrast → inversion → dithering/character selection → padding.
+Increasing the character width retains more detail for edge detection. Edge mode
+replaces tonal shading with outlines; it does not overlay outlines onto the original
+shading. RGB colors are still sampled from the source, so dark-colored outlines can
+be difficult to see on black; turn color off for bright monochrome outlines.
+Padding stays blank and does not receive diffused error. Effects add processing
+work; Canny needs extra temporary arrays. Dithering is independent per frame and
+may produce moving patterns on video.
+
+```powershell
+.\run-cli.ps1 .\Images\img.png --dither floyd-steinberg --palette ' @' --stdout
+.\run-cli.ps1 .\Images\img.png --edges canny --palette ' @' --format svg
+.\run-cli.ps1 --batch .\Images --dither bayer --edges sobel --format html --color
+```
+
+JSON/YAML settings use `dither: none|floyd-steinberg|bayer`,
+`edges: none|sobel|canny`, and `palette: ' .:-=+*#%@'`. Quote YAML palettes to
+preserve spaces, `#`, and other special characters. Custom markup characters are
+escaped in HTML/SVG/styled Markdown. Plain Markdown chooses a fence longer than
+any backtick run. BBCode escapes brackets as `&#91;`/`&#93;` and uses HTML entities
+for markup characters; the forum renderer must support decoding those entities.
+
 ## Performance and memory metrics
 
 The dashboard footer includes live timing and memory readings:
@@ -239,6 +286,9 @@ relative to the current working directory. Input is always supplied on the comma
 | `autoContrast` | `--contrast` / `--no-contrast` | `true` |
 | `clip` | `--clip` | `0.02`, fraction clipped at each end; 0 through 0.499999 |
 | `invert` | `--invert` / `--no-invert` | `false` |
+| `dither` | `--dither` | `none`, `floyd-steinberg`, or `bayer` |
+| `edges` | `--edges` | `none`, `sobel`, or `canny` |
+| `palette` | `--palette` | `' .:-=+*#%@'`; 2–256 printable ASCII characters, dark to light |
 | `color` | `--color` / `--no-color` | `false`; supported by every format except TXT |
 | `fps` | `--fps` | `0`: source average FPS limited to 1–120; otherwise 1–120, MP4 only |
 | `scale` | `--scale` | `1.0`; 0.125–4.0 decoded pixel scale, MP4 only |
@@ -352,4 +402,11 @@ Parallel processing/paint timing checks:
 javac -d out/perf-checks src/*.java tests/*.java
 java -cp out/perf-checks FrameProcessingTest
 java -cp out/perf-checks VideoSourceTest
+```
+
+Effects checks:
+
+```powershell
+javac -d out/effects-checks src/*.java tests/*.java
+java -cp out/effects-checks EffectsTest
 ```

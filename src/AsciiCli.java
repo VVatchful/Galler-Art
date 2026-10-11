@@ -9,7 +9,7 @@ import java.util.stream.Stream;
 /** Scriptable entry point; the legacy ImageInspect launcher remains compatible. */
 public final class AsciiCli {
     private static final Set<String> KEYS = Set.of("preset", "columns", "autoContrast", "clip", "invert", "color",
-            "fps", "scale", "format", "outputDir", "recursive", "overwrite", "maxFrames");
+            "fps", "scale", "format", "outputDir", "recursive", "overwrite", "maxFrames", "dither", "edges", "palette");
     private static final Set<String> EXTENSIONS = Set.of("png", "jpg", "jpeg", "bmp", "gif", "mp4");
 
     public static void main(String[] args) {
@@ -69,7 +69,7 @@ public final class AsciiCli {
                 int count = video.frameCount(fps);
                 if (o.maxFrames > 0) count = Math.min(count, o.maxFrames);
                 try (FrameProcessing.VideoWindow window = new FrameProcessing.VideoWindow(video, fps, o.scale,
-                        new FrameProcessing.Settings(o.columns, o.autoContrast, o.clip, o.invert, o.preset), count)) {
+                        new FrameProcessing.Settings(o.columns, o.autoContrast, o.clip, o.invert, o.preset, o.effects), count)) {
                     for (int i = 0; i < count; i++) {
                         sink.write(name, i + 1, Math.round(i * 1000 / fps), Math.round(1000 / fps), window.get(i).ascii);
                     }
@@ -80,7 +80,7 @@ public final class AsciiCli {
             int count = o.maxFrames > 0 ? Math.min(frames.size(), o.maxFrames) : frames.size();
             long time = 0;
             BufferedImage first = frames.get(0).image;
-            FrameProcessing.Settings settings = new FrameProcessing.Settings(o.columns, o.autoContrast, o.clip, o.invert, o.preset);
+            FrameProcessing.Settings settings = new FrameProcessing.Settings(o.columns, o.autoContrast, o.clip, o.invert, o.preset, o.effects);
             int workers = FrameProcessing.workerCount(settings.estimate(first.getWidth(), first.getHeight()));
             for (int start = 0; start < count; start += workers) {
                 final int offset = start;
@@ -100,7 +100,7 @@ public final class AsciiCli {
         if ((long) size[0] * size[1] > 4_000_000) {
             throw new IllegalArgumentException("ASCII frame exceeds 4 million cells; reduce columns or choose a format preset");
         }
-        return ImageInspect.convert(image, o.columns, o.autoContrast, o.clip, o.invert, o.preset);
+        return ImageInspect.convert(image, o.columns, o.autoContrast, o.clip, o.invert, o.preset, o.effects);
     }
 
     private static String extension(Path path) {
@@ -142,7 +142,7 @@ public final class AsciiCli {
             if (negative && !toggle) throw new IllegalArgumentException("Not a boolean option: " + flag);
             if (toggle) flags.put(key, Boolean.toString(!negative));
             else {
-                if (++i == args.length || args[i].startsWith("--")) throw new IllegalArgumentException("Missing value for " + flag);
+                if (++i == args.length || (args[i].startsWith("--") && !key.equals("palette"))) throw new IllegalArgumentException("Missing value for " + flag);
                 flags.put(key, args[i]);
             }
         }
@@ -175,6 +175,15 @@ public final class AsciiCli {
         o.fps = number(settings, "fps", 0, 0, 120);
         if (o.fps > 0 && o.fps < 1) throw new IllegalArgumentException("fps must be 0 (source rate) or 1 to 120");
         o.maxFrames = integer(settings, "maxFrames", 0, 0, Integer.MAX_VALUE);
+        try {
+            o.effects = new ImageInspect.Effects(
+                    ImageInspect.Dither.valueOf(settings.getOrDefault("dither", "none").toUpperCase(Locale.ROOT).replace('-', '_')),
+                    ImageInspect.Edges.valueOf(settings.getOrDefault("edges", "none").toUpperCase(Locale.ROOT)),
+                    settings.getOrDefault("palette", ImageInspect.CHARACTERS));
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException("Invalid effects: " + exception.getMessage()
+                    + ". Dither: none, floyd-steinberg, bayer. Edges: none, sobel, canny.");
+        }
         o.format = settings.getOrDefault("format", "txt").toLowerCase(Locale.ROOT);
         if (o.format.equals("md")) o.format = "markdown";
         if (o.format.equals("ans")) o.format = "ansi";
@@ -211,6 +220,7 @@ public final class AsciiCli {
         double clip, scale, fps;
         String format;
         ImageInspect.OutputFormat preset;
+        ImageInspect.Effects effects;
     }
 
     private static final class Sink {
@@ -272,6 +282,8 @@ public final class AsciiCli {
                 + "  --preset <name>           original, sd, hd/720p, full-hd/1080p, qhd, uhd/4k, square, portrait, vertical\n"
                 + "  --columns <1..2000>       Override preset character width\n"
                 + "  --[no-]contrast --clip <0..0.499999> --[no-]invert --[no-]color\n"
+                + "  --dither <none|floyd-steinberg|bayer> --edges <none|sobel|canny>\n"
+                + "  --palette <characters>   2..256 printable ASCII characters ordered dark to light\n"
                 + "  --fps <0|1..120>          MP4 sampling rate; 0 uses source average FPS\n"
                 + "  --scale <0.125..4>        MP4 pixel scaling factor\n"
                 + "  --max-frames <count>      Per-input limit; 0 converts all frames\n"
